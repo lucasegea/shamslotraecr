@@ -6424,7 +6424,49 @@ Vamos a modificar el código:
 ```
 
 ```
+Los cambios realizados son:
 
+1. Añadido un cache en memoria `self.existing_products` para almacenar los IDs de productos existentes
+
+2. Nuevo método `_load_existing_products` que:
+   - Carga todos los `external_product_id` al inicio
+   - Puede filtrar por categoría si se especifica
+   - Almacena los IDs en un set para búsqueda O(1)
+
+3. Modificado `process_product_card` para:
+   - Verificar si el producto existe antes de procesarlo
+   - Saltar productos existentes inmediatamente
+
+4. La verificación se hace temprano en el proceso, antes de:
+   - Descargar detalles del producto
+   - Procesar imágenes
+   - Hacer cualquier request a la API
+
+Las ventajas de este enfoque son:
+1. Una sola consulta a la base de datos al inicio
+2. Verificaciones rápidas en memoria
+3. Evita procesamiento innecesario
+4. Reduce significativamente las llamadas a la API
+
+Cuando ejecutes el scraper ahora:
+1. Primero cargará los IDs existentes
+2. Mostrará cuántos productos están en cache
+3. Saltará rápidamente los productos que ya existen
+4. Procesará solo los productos nuevos
+
+Esto debería hacer el scraping mucho más rápido ya que solo procesará productos nuevos o que han cambiado. ¿Quieres que agreguemos también un contador para mostrar cuántos productos se saltaron vs. cuántos se procesaron?
+
+---
+
+_**User**_
+
+Necesito hacer un commit de lo que tengo ya hecho el add
+
+---
+
+_**Assistant**_
+
+Si ya hiciste el `git add`, ahora necesitas hacer el commit. Te sugiero un mensaje descriptivo que capture los cambios importantes que hemos hecho: Parece que hubo un error con el formato del comando. Vamos a intentarlo de nuevo con el mensaje en una sola línea: 
 
 ---
 
