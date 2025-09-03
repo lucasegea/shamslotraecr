@@ -8,6 +8,8 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from tenacity import retry, stop_after_attempt, wait_exponential
 from urllib.parse import urljoin
+import tqdm  # Asegúrate de tener tqdm instalado para la barra de progreso
+import logging
 
 from supabase_client import SupabaseClient
 from utils.price import parse_price
@@ -20,6 +22,13 @@ HEADERS = {
     "User-Agent": f"OfertasBScraper/1.0 (Contact: {os.getenv('CONTACT_EMAIL')})"
 }
 
+# Configurar el logger para guardar en un archivo
+logging.basicConfig(
+    filename='scraper_log.txt',
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
 class OfertasBScraper:
     def __init__(self):
         self.supabase = SupabaseClient()
@@ -29,22 +38,28 @@ class OfertasBScraper:
             follow_redirects=True
         )
         # Cache de productos existentes
-        self.existing_products = set()
+        self.existing_products = {}
         
     def _load_existing_products(self, category_id: Optional[str] = None):
-        """Carga los external_product_id existentes en la base de datos"""
+        """Carga los external_product_id y source_html_hash existentes en la base de datos"""
         try:
-            query = self.supabase.client.table("products").select("external_product_id")
+            query = self.supabase.client.table("products").select("external_product_id,source_html_hash")
             if category_id:
-                result = query.eq("category_id", category_id).execute()
-            else:
-                result = query.execute()
-                
-            self.existing_products = {str(product['external_product_id']) for product in result.data}
+                query = query.eq("category_id", category_id)
+
+            # Establecer un límite alto para asegurarnos de obtener todos los productos
+            query = query.limit(100000)
+            result = query.execute()
+
+            # Almacenar solo los hashes como valores
+            self.existing_products = {
+                product['external_product_id']: str(product['source_html_hash'])
+                for product in result.data if product.get('source_html_hash')
+            }
             print(f"Cargados {len(self.existing_products)} productos existentes en cache")
         except Exception as e:
             print(f"Error cargando productos existentes: {str(e)}")
-            self.existing_products = set()
+            self.existing_products = {}
 
     def close(self):
         self.session.close()
@@ -52,9 +67,15 @@ class OfertasBScraper:
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     def _fetch_page(self, url: str) -> str:
         """Fetch a page with retry logic"""
-        response = self.session.get(url)
-        response.raise_for_status()
-        return response.text
+        try:
+            response = self.session.get(url)
+            response.raise_for_status()
+            return response.text
+        except httpx.HTTPStatusError as e:
+            print(f"Error al obtener la página: {url}")
+            print(f"Código de estado HTTP: {response.status_code}")
+            print(f"Contenido de la respuesta: {response.text[:500]}...")  # Limitar el contenido para depuración
+            raise e
 
     def get_categories(self) -> List[Dict[str, str]]:
         """Fetch all categories from the main page"""
@@ -79,6 +100,35 @@ class OfertasBScraper:
                 
         print(f"\nTotal de categorías encontradas: {len(categories)}\n")
         return categories
+
+    def fetch_categories(self) -> List[Dict]:
+        """Fetch all categories from the main page"""
+        try:
+            url = urljoin(BASE_URL, "productos_cat.asp")
+            page_content = self._fetch_page(url)
+            print(page_content[:500])  # Imprimir parte del contenido para depuración
+            soup = BeautifulSoup(page_content, "html.parser")
+            categories = []
+
+            # Buscar el elemento <select> que contiene las categorías
+            category_select = soup.find("select")  # Ajustar para buscar cualquier <select>
+            if not category_select:
+                raise ValueError("No se encontró el formulario de categorías")
+
+            # Extraer las opciones dentro del <select>
+            for option in category_select.find_all("option"):
+                if option.get("value"):
+                    categories.append({
+                        "name": option.get_text(strip=True),
+                        "external_id": option["value"],
+                        "url": f"{BASE_URL}/productos_cat.asp?id={option['value']}"
+                    })
+
+            print(f"Categorías encontradas: {len(categories)}")
+            return categories
+        except Exception as e:
+            print(f"Error fetching categories: {str(e)}")
+            return []
 
     def get_category_pages(self, category_id: str) -> List[str]:
         """Get all pagination URLs for a category"""
@@ -137,6 +187,118 @@ class OfertasBScraper:
         pages_list = sorted(list(pages))
         print(f"Encontradas {len(pages_list)} páginas para categoría {category_id}")
         return pages_list
+
+    def fetch_category_pages(self, category_url: str, category_id: str):
+        """Fetch all pages for a given category and process products."""
+        try:
+            # Validar que category_id esté presente
+            if not category_id:
+                raise ValueError("category_id is required")
+
+            base_url = f"{BASE_URL}/productos_cat.asp?id={category_id}"
+            pages = [base_url]  # Página inicial
+
+            # Obtener el contenido de la página inicial
+            page_content = self._fetch_page(base_url)
+            soup = BeautifulSoup(page_content, "html.parser")
+
+            # Buscar enlaces a otras páginas
+            pagination_links = soup.select("a[href*='productos_cat.asp?id={category_id}&pagina=']")
+            for link in pagination_links:
+                href = link.get("href")
+                if href:
+                    full_url = urljoin(BASE_URL, href)
+                    pages.append(full_url)
+
+            print(f"Páginas encontradas para la categoría {category_id}: {len(pages)}")
+            
+            # Mantener el progreso de categorías visible en la consola
+            with tqdm.tqdm(total=len(pages), desc=f"Procesando categoría {category_id}", position=0, leave=True) as pbar:
+                for page_url in pages:
+                    print(f"Processing page: {page_url}")
+                    html = self._fetch_page(page_url)
+                    soup = BeautifulSoup(html, 'html.parser')
+
+                    # Buscar las tablas que contienen los productos
+                    product_tables = [
+                        table for table in soup.find_all('table')
+                        if table.get('width') == '200' and table.get('id') == 'customers'
+                        and table.find('a') and table.find('img')
+                        and len(table.find_all('tr')) >= 3
+                    ]
+
+                    if not product_tables:
+                        print(f"Warning: No product tables found on page {page_url}")
+                        continue
+
+                    # Generar hashes para todos los productos en la página
+                    page_hashes = {}
+                    for product_table in product_tables:
+                        try:
+                            # Extraer datos básicos del producto
+                            img_row = product_table.find('tr').find('td').find('a')
+                            img_elem = img_row.find('img')
+                            list_image = urljoin(BASE_URL, img_elem['src'])
+
+                            name_cell = product_table.select_one('tr td[colspan="1"]')
+                            product_name = name_cell.get_text(strip=True)
+
+                            price_row = product_table.find_all('tr')[2]
+                            price_cell = price_row.find('td')
+                            price_raw = price_cell.text.strip()
+
+                            # Generar hash para el producto
+                            hash_data = f"{product_name}:{price_raw}:{list_image}"
+                            product_hash = hashlib.md5(hash_data.encode('utf-8')).hexdigest()
+
+                            # Asociar hash con la tabla del producto
+                            page_hashes[product_hash] = product_table
+                        except Exception as e:
+                            print(f"Error generating hash for product: {str(e)}")
+
+                    # Comparar hashes de la página con los existentes
+                    existing_hashes = set(self.existing_products.values())
+                    new_hashes = set(page_hashes.keys()) - existing_hashes
+
+                    if not new_hashes:
+                        print(f"Saltando página {page_url} - todos los productos ya existen y no han cambiado")
+                        continue
+
+                    # Inicializar barra de progreso para los productos de la página
+                    total_products = len(new_hashes)
+                    product_progress = tqdm.tqdm(total=total_products, desc=f"Página {page_url}", unit="producto")
+
+                    # Procesar solo los productos necesarios
+                    for product_hash in new_hashes:
+                        product_table = page_hashes[product_hash]
+                        try:
+                            product_data = self.process_product_card(product_table, category['external_id'])
+                            if not product_data:
+                                product_progress.update(1)
+                                continue
+
+                            # Upsert product
+                            result = self.supabase.upsert_product(product_data)
+                            if result:
+                                if result.get('inserted'):
+                                    print(f"Producto {product_data['external_product_id']} insertado como nuevo.")
+                                else:
+                                    print(f"Producto {product_data['external_product_id']} actualizado.")
+                                    
+                                added_products.append(product_data['external_product_id'])
+                            else:
+                                print(f"Error al insertar/actualizar el producto {product_data['external_product_id']}")
+                        except Exception as e:
+                            print(f"Error procesando el producto: {str(e)}")
+                        finally:
+                            product_progress.update(1)
+
+                    product_progress.close()
+                    
+            return pages
+        except Exception as e:
+            print(f"Error fetching pages for category {category_id}: {str(e)}")
+            return []
 
     def get_product_details(self, product_id: str) -> Dict:
         """Get detailed product information from the product page"""
@@ -201,276 +363,336 @@ class OfertasBScraper:
         return details
 
     def process_product_card(self, product_table: BeautifulSoup, category_id: str) -> Dict:
-        """Extract product information from a product table and its detail page"""
+        """Extract product information from a product table without visiting the product page."""
         try:
-            # Primera fila: imagen y enlace
-            # El enlace puede estar con o sin la clase 'displayed'
+            # Obtener enlace del producto y extraer el ID
             img_row = product_table.find('tr').find('td').find('a')
-            if not img_row:
+            if img_row and img_row.get('href'):
+                product_url = urljoin(BASE_URL, img_row['href'])
+                try:
+                    external_product_id = int(product_url.split('id=')[-1])  # Convertir a entero
+                except ValueError:
+                    raise ValueError(f"Invalid external_product_id extracted from URL: {product_url}")
+            else:
                 raise ValueError("Could not find product link")
-                
-            # Extraer URL del producto y su ID
-            product_url = urljoin(BASE_URL, img_row['href'])
-            external_product_id = product_url.split('id=')[-1]
-            
-            # Si el producto ya existe, lo saltamos
-            if external_product_id in self.existing_products:
-                print(f"Saltando producto {external_product_id} - ya existe en la base de datos")
-                return None
-            
-            # Obtener imagen de la lista primero
-            img_elem = img_row.find('img')
-            if not img_elem:
-                raise ValueError("Could not find product image")
-            list_image = urljoin(BASE_URL, img_elem['src'])
-            
-            # Obtener detalles completos del producto
-            details = self.get_product_details(external_product_id)
-            
-            # Si no se encontró una imagen de alta calidad, usar la de la lista
-            if 'high_res_image' not in details:
-                details['high_res_image'] = list_image
-            elif details['high_res_image'] == list_image:
-                # Si la imagen es la misma que en la lista, intentar buscar una mejor
-                alt_img = img_elem.get('src', '').replace('/upload/', '/upload/hq/')
-            
-            # Usar el nombre de la lista si no se encontró el nombre completo
-            if 'full_name' not in details:
-                name_cell = product_table.select_one('tr td[colspan="1"]')
-                if not name_cell or not name_cell.get_text(strip=True):
-                    raise ValueError("Could not find product name")
-                details['full_name'] = name_cell.get_text(strip=True)
-            
-            # Si no se encontró el precio en la página de detalles, usar el de la lista
-            if 'price_raw' not in details:
-                price_row = product_table.find_all('tr')[2]
-                if not price_row:
-                    raise ValueError("Could not find price row")
-                    
-                price_cell = price_row.find('td')
-                if not price_cell or not any(symbol in price_cell.text for symbol in ['₡', '¢']):
-                    raise ValueError("Could not find price element")
-                    
-                price_raw = price_cell.text.strip()
-                details['price_raw'] = price_raw
-                _, price_numeric = parse_price(price_raw)
-                details['price_numeric'] = price_numeric
-            
-            # Asegurarnos de que todos los datos son strings
-            hash_components = {
-                'id': str(external_product_id),
-                'name': str(details['full_name']),
-                'price': str(details['price_raw']),
-                'image': str(details['high_res_image'])
-            }
-            
-            # Log para debug
-            print(f"Hash components for product {external_product_id}:")
-            for k, v in hash_components.items():
-                print(f"  {k}: {v} (type: {type(v)})")
-            
-            # Generate hash from components
-            hash_data = f"{hash_components['id']}:{hash_components['name']}:{hash_components['price']}:{hash_components['image']}"
-            html_hash = hashlib.md5(hash_data.encode('utf-8')).hexdigest()
-            
-            # Imprimir la URL de la imagen para debug
-            print(f"Product {external_product_id} image URL: {details['high_res_image']}")
-            
-            # Validar y convertir datos
-            product_data = {
-                "external_product_id": str(external_product_id),
-                "product_url": str(product_url),
-                "image_url": str(details['high_res_image']),
-                "name": str(details['full_name']),
-                "price_raw": str(details['price_raw']),
-                "price_numeric": float(details['price_numeric']),
-                "source_html_hash": str(html_hash),
-                "category_id": str(category_id)
-            }
-            
-            # Verificar que tenemos todos los datos necesarios
-            if not all(product_data.values()):
-                raise ValueError("Missing required product data")
-            
-            # Agregar campos adicionales si existen
-            if 'estado' in details:
-                product_data['estado'] = details['estado']
-            if 'peso' in details:
-                product_data['peso'] = details['peso']
-            if 'categoria_full' in details:
-                product_data['categoria_full'] = details['categoria_full']
-            
-            return product_data
-        except Exception as e:
-            raise ValueError(f"Error processing product: {str(e)}")
-        
-        # Generate HTML hash
-        card_html = str(product_table)
-        html_hash = hashlib.md5(card_html.encode('utf-8')).hexdigest()
-        
-        return {
-            "external_product_id": external_product_id,
-            "product_url": product_url,
-            "image_url": image_url,
-            "name": product_name,
-            "price_raw": price_raw,
-            "price_numeric": price_numeric,
-            "source_html_hash": html_hash,
-            "category_id": category_id
-        }
 
+            # Obtener imagen del producto
+            img_elem = img_row.find('img')
+            if not img_elem or not img_elem.get('src'):
+                logging.warning(f"No image_file_url for product {external_product_id}")
+                list_image = None
+            else:
+                list_image = urljoin(BASE_URL, img_elem['src'])
+
+            # Obtener nombre y precio desde la tabla de la categoría
+            name_cell = product_table.select_one('tr td[colspan="1"]')
+            if not name_cell or not name_cell.get_text(strip=True):
+                raise ValueError("Could not find product name")
+            product_name = name_cell.get_text(strip=True)
+
+            price_row = product_table.find_all('tr')[2]
+            if not price_row:
+                raise ValueError("Could not find price row")
+            price_cell = price_row.find('td')
+            if not price_cell or not any(symbol in price_cell.text for symbol in ['₡', '¢']):
+                raise ValueError("Could not find price element")
+            price_raw = price_cell.text.strip()
+            _, price_numeric = parse_price(price_raw)
+
+            # Validar que price_numeric es válido
+            if not isinstance(price_numeric, (int, float)):
+                raise ValueError(f"Invalid price_numeric for product {external_product_id}: {price_numeric}")
+
+            # Generar el hash del producto actual usando solo datos de la categoría
+            hash_components = {
+                'name': str(product_name),
+                'price': str(price_raw),
+                'image': str(list_image)
+            }
+            hash_data = f"{hash_components['name']}:{hash_components['price']}:{hash_components['image']}"
+            current_hash = hashlib.md5(hash_data.encode('utf-8')).hexdigest()
+
+            # Si el producto existe y su hash no ha cambiado, lo saltamos
+            if external_product_id in self.existing_products:
+                existing_hash = self.existing_products[external_product_id]
+                if existing_hash == current_hash:
+                    logging.info(f"Skipping product {external_product_id} - no changes detected")
+                    return None
+
+            # Imprimir y guardar en el log los datos del producto para depuración
+            log_message = f"Procesando producto {external_product_id}: {product_name}, Precio: {price_raw}, Imagen: {list_image}"
+            print(log_message)
+            logging.info(log_message)
+
+            # Retornar datos básicos del producto
+            return {
+                "external_product_id": external_product_id,
+                "product_url": product_url,
+                "image_url": list_image,
+                "name": product_name,
+                "price_raw": price_raw,
+                "price_numeric": float(price_numeric),
+                "source_html_hash": current_hash,
+                "category_id": category_id
+            }
+
+        except Exception as e:
+            error_message = f"Error processing product: {str(e)}"
+            print(error_message)
+            logging.error(error_message)
+            return None
+    
     def scrape_category(self, category_id: Optional[str] = None):
         """Scrape a single category or all categories"""
         categories = ([c for c in self.get_categories() if c['external_id'] == category_id] 
                      if category_id else self.get_categories())
-                     
+
         # Cargar productos existentes
         self._load_existing_products(category_id)
-        
+
+        # Inicializar barra de progreso para las categorías
+        total_categories = len(categories)
+        category_progress = tqdm.tqdm(total=total_categories, desc="Procesando categorías", unit="categoría")
+
         for category in categories:
             print(f"\nProcesando categoría: {category['name']} ({category['external_id']})")
-            
+
             # Primero contar productos totales
             total_products = 0
+            added_products = []  # Lista para registrar productos añadidos
             pages = self.get_category_pages(category['external_id'])
             print(f"Encontradas {len(pages)} páginas")
-            
-            # Contar productos en todas las páginas
+
+            # Inicializar barra de progreso para las páginas de la categoría
+            total_pages = len(pages)
+            page_progress = tqdm.tqdm(total=total_pages, desc=f"Categoría {category['name']}", unit="página")
+
             for page_url in pages:
+                print(f"Processing page: {page_url}")
                 html = self._fetch_page(page_url)
                 soup = BeautifulSoup(html, 'html.parser')
+
+                # Buscar las tablas que contienen los productos
                 product_tables = [
                     table for table in soup.find_all('table')
                     if table.get('width') == '200' and table.get('id') == 'customers'
                     and table.find('a') and table.find('img')
                     and len(table.find_all('tr')) >= 3
                 ]
-                total_products += len(product_tables)
-            
-            # Actualizar categoría con el conteo de productos
-            category['product_count'] = total_products
-            print(f"Total de productos en categoría: {total_products}")
-            
-            # Upsert category con el conteo actualizado
-            db_category = self.supabase.upsert_category(category)
-            if not db_category:
-                print(f"Error al actualizar categoría {category['external_id']}")
-                continue
-            
-            products_processed = 0
-            products_updated = 0
-            
-            for page_url in pages:
-                print(f"Processing page: {page_url}")
-                html = self._fetch_page(page_url)
-                soup = BeautifulSoup(html, 'html.parser')
-                
-                # Buscar las tablas que contienen los productos
-                # La estructura es:
-                # 1. Tabla principal
-                # 2. tr > td > tabla grande
-                # 3. tr > td > tabla de producto individual
-                product_tables = []
-                
-                # Buscar las tablas de productos que tienen una imagen y un enlace
-                for table in soup.find_all('table'):
-                    # Las tablas de productos tienen un ancho fijo
-                    if table.get('width') == '200' and table.get('id') == 'customers':
-                        # Verificar que contiene los elementos esperados
-                        if (table.find('a') and 
-                            table.find('img') and 
-                            len(table.find_all('tr')) >= 3):  # Al menos 3 filas (imagen, nombre, precio)
-                            product_tables.append(table)
-                
+
                 if not product_tables:
                     print(f"Warning: No product tables found on page {page_url}")
                     continue
-                    
-                print(f"Found {len(product_tables)} valid product tables on page")
-                    
-                print(f"Found {len(product_tables)} products on page")
-                
-                print(f"Encontrados {len(product_tables)} productos en esta página")
-                
-                for idx, product_table in enumerate(product_tables, 1):
+
+                # Generar hashes para todos los productos en la página
+                page_hashes = {}
+                for product_table in product_tables:
                     try:
-                        print(f"\nProcesando producto {idx}/{len(product_tables)}")
-                        product_data = self.process_product_card(product_table, db_category['id'])
-                        
+                        # Extraer datos básicos del producto
+                        img_row = product_table.find('tr').find('td').find('a')
+                        img_elem = img_row.find('img')
+                        list_image = urljoin(BASE_URL, img_elem['src'])
+
+                        name_cell = product_table.select_one('tr td[colspan="1"]')
+                        product_name = name_cell.get_text(strip=True)
+
+                        price_row = product_table.find_all('tr')[2]
+                        price_cell = price_row.find('td')
+                        price_raw = price_cell.text.strip()
+
+                        # Generar hash para el producto
+                        hash_data = f"{product_name}:{price_raw}:{list_image}"
+                        product_hash = hashlib.md5(hash_data.encode('utf-8')).hexdigest()
+
+                        # Asociar hash con la tabla del producto
+                        page_hashes[product_hash] = product_table
+                    except Exception as e:
+                        print(f"Error generating hash for product: {str(e)}")
+
+                # Comparar hashes de la página con los existentes
+                existing_hashes = set(self.existing_products.values())
+                new_hashes = set(page_hashes.keys()) - existing_hashes
+
+                if not new_hashes:
+                    print(f"Saltando página {page_url} - todos los productos ya existen y no han cambiado")
+                    continue
+
+                # Inicializar barra de progreso para los productos de la página
+                total_products = len(new_hashes)
+                product_progress = tqdm.tqdm(total=total_products, desc=f"Página {page_url}", unit="producto")
+
+                # Procesar solo los productos necesarios
+                for product_hash in new_hashes:
+                    product_table = page_hashes[product_hash]
+                    try:
+                        product_data = self.process_product_card(product_table, category['external_id'])
                         if not product_data:
-                            print("Warning: Could not process product card")
+                            product_progress.update(1)
                             continue
-                            
-                        # Download and upload image if needed
-                        if product_data.get('image_url'):
-                            try:
-                                print(f"Downloading image from: {product_data['image_url']}")
-                                image_resp = self.session.get(product_data['image_url'])
-                                
-                                if image_resp.status_code != 200:
-                                    print(f"Warning: Image download failed with status {image_resp.status_code}")
-                                    continue
-                                    
-                                if not image_resp.content:
-                                    print(f"Warning: Empty image content received")
-                                    continue
-                                    
-                                # Verificar que tenemos datos de imagen válidos
-                                if not isinstance(image_resp.content, bytes):
-                                    print(f"Warning: Invalid image data type: {type(image_resp.content)}")
-                                    continue
-                                
-                                # Verificar que la imagen tiene un tamaño razonable
-                                content_length = len(image_resp.content)
-                                if content_length < 100:  # Muy pequeña para ser una imagen válida
-                                    print(f"Warning: Image content too small ({content_length} bytes)")
-                                    continue
-                                    
-                                print(f"Uploading image for product {product_data['external_product_id']} ({content_length} bytes)")
-                                image_file_url = self.supabase.upload_product_image(
-                                    category['external_id'],
-                                    product_data['external_product_id'],
-                                    image_resp.content
-                                )
-                                
-                                if image_file_url:
-                                    product_data['image_file_url'] = str(image_file_url)
-                                else:
-                                    print(f"Warning: Could not get image URL for product {product_data['external_product_id']}")
-                            except Exception as img_e:
-                                print(f"Warning: Could not process image for product {product_data.get('external_product_id')}: {str(img_e)}")
-                        
+
                         # Upsert product
                         result = self.supabase.upsert_product(product_data)
                         if result:
-                            products_processed += 1
-                            if result.get('updated_at'):
-                                products_updated += 1
+                            if result.get('inserted'):
+                                print(f"Producto {product_data['external_product_id']} insertado como nuevo.")
+                            else:
+                                print(f"Producto {product_data['external_product_id']} actualizado.")
                                 
+                            added_products.append(product_data['external_product_id'])
+                        else:
+                            print(f"Error al insertar/actualizar el producto {product_data['external_product_id']}")
                     except Exception as e:
-                        print(f"Error processing product: {str(e)}")
+                        print(f"Error procesando el producto: {str(e)}")
+                    finally:
+                        product_progress.update(1)
+
+                product_progress.close()
                 
-                # Rate limiting
-                time.sleep(1)
+            page_progress.close()
+
+            # Actualizar el cache local con los nuevos productos añadidos
+            for product_id in added_products:
+                product_hash = hashlib.md5(f"{product_id}".encode('utf-8')).hexdigest()
+                self.existing_products[product_id] = product_hash
             
-            print(f"Category complete. Processed: {products_processed}, Updated: {products_updated}")
+            category_progress.update(1)
+
+        category_progress.close()
+
+    def scrape_all(self):
+        """Scrape all categories"""
+        self.scrape_category()
+
+    def fetch_category(self, category_id: str) -> Dict:
+        """Fetch a specific category by its external_id"""
+        try:
+            categories = self.fetch_categories()
+            for category in categories:
+                if category["external_id"] == category_id:
+                    print(f"Categoría encontrada: {category['name']} ({category['external_id']})")
+                    return category
+            raise ValueError(f"Categoría con ID {category_id} no encontrada")
+        except Exception as e:
+            print(f"Error fetching category {category_id}: {str(e)}")
+            return {}
+
+    def process_page(self, page_url: str, category: Dict):
+        """Process a specific page of a category"""
+        try:
+            print(f"Procesando página: {page_url}")
+            page_content = self._fetch_page(page_url)
+            soup = BeautifulSoup(page_content, "html.parser")
+
+            # Ajustar el selector para buscar productos
+            product_tables = soup.find_all("table")  # Buscar todas las tablas como punto de partida
+            if not product_tables:
+                print(f"No se encontraron productos en la página: {page_url}")
+                return
+
+            # Inicializar barra de progreso
+            total_products = len(product_tables)
+            product_progress = tqdm.tqdm(total=total_products, desc=f"Procesando productos en {page_url}", unit="producto")
+
+            for product_table in product_tables:
+                product_data = self.process_product_card(product_table, category['external_id'])
+                if product_data:
+                    result = self.supabase.upsert_product(product_data)
+                    if result:
+                        print(f"Producto {product_data['external_product_id']} procesado exitosamente.")
+                product_progress.update(1)
+
+            product_progress.close()
+        except Exception as e:
+            print(f"Error procesando la página {page_url}: {str(e)}")
+
+def find_product_category(product_id: int):
+    """Buscar la categoría de un producto específico por su ID."""
+    try:
+        url = f"{BASE_URL}/productos_full.asp?id={product_id}"
+        print(f"Buscando producto en: {url}")
+        response = httpx.get(url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # Depuración: Imprimir parte del contenido HTML
+        print("Contenido HTML de la página del producto (primeros 500 caracteres):")
+        print(response.text[:500])
+
+        # Buscar la categoría en la página del producto
+        category_label = soup.find(text=lambda text: text and "sin categoria" in text.lower())
+        if category_label:
+            print(f"Producto {product_id} pertenece a la categoría: 'sin categoría'")
+            return {"category_name": "sin categoría", "category_url": None}
+
+        category_link = soup.find("a", href=lambda href: href and "productos_cat.asp?id=" in href)
+        if category_link:
+            category_url = urljoin(BASE_URL, category_link["href"])
+            category_name = category_link.get_text(strip=True)
+            print(f"Producto {product_id} pertenece a la categoría: {category_name} ({category_url})")
+            return {"category_name": category_name, "category_url": category_url}
+        else:
+            print(f"No se encontró la categoría para el producto {product_id}")
+            return None
+    except Exception as e:
+        print(f"Error buscando la categoría del producto {product_id}: {str(e)}")
+        return None
 
 def main():
+    print("Iniciando el script...")
+
     parser = argparse.ArgumentParser(description='Scrape OfertasB products')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--all', action='store_true', help='Scrape all categories')
     group.add_argument('--category', type=str, help='Scrape specific category ID')
-    
+
     args = parser.parse_args()
-    
+
     scraper = OfertasBScraper()
     try:
-        if args.all:
-            scraper.scrape_category()
-        else:
-            scraper.scrape_category(args.category)
-    finally:
-        scraper.close()
+        print("Cargando categorías...")
+        categories = scraper.fetch_categories() if args.all else [scraper.fetch_category(args.category)]
+        print(f"Categorías cargadas: {len(categories)}")
 
+        # Inicializar barra de progreso para las categorías
+        total_categories = len(categories)
+        category_progress = tqdm.tqdm(total=total_categories, desc="Procesando categorías", unit="categoría")
+
+        for category in categories:
+            print(f"Procesando categoría: {category['name']} ({category['external_id']})")
+            pages = scraper.fetch_category_pages(category['url'], category['external_id'])
+            print(f"Páginas encontradas para la categoría {category['name']}: {len(pages)}")
+
+            # Inicializar barra de progreso para las páginas
+            total_pages = len(pages)
+            page_progress = tqdm.tqdm(total=total_pages, desc=f"Categoría {category['name']}", unit="página")
+
+            for page_url in pages:
+                print(f"Analizando página: {page_url}")
+                # Asegurar que la categoría no sea None
+                category = next((c for c in categories if c['external_id'] == category['external_id']), None)
+                if not category:
+                    raise ValueError("La categoría no está definida al procesar la página")
+                scraper.process_page(page_url, category)
+                page_progress.update(1)
+
+            page_progress.close()
+            category_progress.update(1)
+
+        category_progress.close()
+        print("Script completado.")
+    except Exception as e:
+        print(f"Error en la ejecución del script: {str(e)}")
+
+# Ejecución directa
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Ejecutar funciones específicas del scraper.")
+    parser.add_argument("--all", action="store_true", help="Ejecutar el scraper para todas las categorías.")
+    parser.add_argument("--find-product", type=int, help="Buscar un producto por su external_product_id.")
+    args = parser.parse_args()
+
+    if args.find_product:
+        find_product_category(args.find_product)
+    elif args.all:
+        # Lógica existente para ejecutar el scraper completo
+        print("Ejecutando el scraper para todas las categorías...")
+        main()
