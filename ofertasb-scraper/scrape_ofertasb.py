@@ -797,13 +797,27 @@ def main():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--all', action='store_true', help='Scrape all categories')
     group.add_argument('--category', type=str, help='Scrape specific category ID')
+    group.add_argument('--categories', type=str, help='Scrape specific category IDs separated by commas (e.g., 193,212,124)')
 
     args = parser.parse_args()
 
     scraper = OfertasBScraper()
     try:
         print("Cargando categorías...")
-        categories = scraper.fetch_categories() if args.all else [scraper.fetch_category(args.category)]
+        if args.all:
+            categories = scraper.fetch_categories()
+        elif args.categories:
+            category_ids = args.categories.split(',')
+            categories = []
+            for cat_id in category_ids:
+                try:
+                    cat = scraper.fetch_category(cat_id.strip())
+                    if cat:
+                        categories.append(cat)
+                except Exception as e:
+                    print(f"Error cargando la categoría {cat_id}: {str(e)}")
+        else:
+            categories = [scraper.fetch_category(args.category)]
         print(f"Categorías cargadas: {len(categories)}")
 
         # Inicializar barra de progreso para las categorías
@@ -840,11 +854,15 @@ def main():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ejecutar funciones específicas del scraper.")
     parser.add_argument("--all", action="store_true", help="Ejecutar el scraper para todas las categorías.")
+    parser.add_argument("--categories", type=str, help="Ejecutar el scraper para categorías específicas, separadas por comas (ej: 193,212,124).")
     parser.add_argument("--find-product", type=int, help="Buscar un producto por su external_product_id.")
     args = parser.parse_args()
 
     if args.find_product:
         find_product_category(args.find_product)
+    elif args.categories:
+        print(f"Ejecutando el scraper para categorías específicas: {args.categories}")
+        main()
     elif args.all:
         # Lógica existente para ejecutar el scraper completo
         print("Ejecutando el scraper para todas las categorías...")
