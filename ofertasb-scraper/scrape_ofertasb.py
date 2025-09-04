@@ -136,31 +136,79 @@ class OfertasBScraper:
         pages = set([base_url])  # Usamos un set para evitar duplicados
         
         def extract_page_links(url):
-            html = self._fetch_page(url)
-            soup = BeautifulSoup(html, 'html.parser')
-            new_links = set()
-            
-            # Buscar la tabla de paginación (la que no tiene imágenes)
-            pagination_table = None
-            for table in soup.find_all('table', id='customers'):
-                if not table.find('img'):
-                    pagination_table = table
-                    break
-            
-            if pagination_table:
-                for link in pagination_table.find_all('a'):
-                    href = link.get('href', '')
-                    if not href:
-                        continue
+            try:
+                html = self._fetch_page(url)
+                soup = BeautifulSoup(html, 'html.parser')
+                new_links = set()
+                
+                # Método 1: Buscar la tabla de paginación (la que no tiene imágenes)
+                pagination_table = None
+                for table in soup.find_all('table', id='customers'):
+                    if not table.find('img'):
+                        pagination_table = table
+                        break
+                
+                if pagination_table:
+                    for link in pagination_table.find_all('a'):
+                        href = link.get('href', '')
+                        if not href:
+                            continue
+                            
+                        text = link.text.strip()
+                        full_url = urljoin(BASE_URL, href)
                         
-                    text = link.text.strip()
-                    full_url = urljoin(BASE_URL, href)
-                    
-                    # Agregar todos los enlaces numéricos y el "Siguiente"
-                    if text.isdigit() or text == "Siguiente":
+                        # Agregar todos los enlaces numéricos y el "Siguiente"
+                        # También capturamos "Siguiente" para asegurar la navegación completa
+                        if text.isdigit() or text == "Siguiente":
+                            print(f"Encontrado enlace de paginación: {text} -> {full_url}")
+                            new_links.add(full_url)
+                
+                # Método 2: Usar selectores CSS específicos para buscar enlaces de paginación
+                # Esto proporciona una capa adicional de robustez
+                pagination_links = soup.select(f"a[href*='productos_cat.asp?id={category_id}&pagina=']")
+                for link in pagination_links:
+                    href = link.get("href")
+                    if href:
+                        full_url = urljoin(BASE_URL, href)
                         new_links.add(full_url)
-            
-            return new_links
+                
+                # Método 3: Buscar cualquier enlace que contenga la palabra "pagina="
+                pagination_links = soup.select("a[href*='pagina=']")
+                for link in pagination_links:
+                    href = link.get("href")
+                    # Verificar que el enlace pertenece a la misma categoría
+                    if href and f"id={category_id}" in href:
+                        full_url = urljoin(BASE_URL, href)
+                        new_links.add(full_url)
+                
+                # Método 4: Detectar específicamente los enlaces numéricos y "Siguiente" que pueden tener formato especial
+                # como los que aparecen en la imagen: <1>, <2>, etc.
+                for link in soup.find_all('a'):
+                    href = link.get('href', '')
+                    if not href or 'productos_cat.asp' not in href:
+                        continue
+                    
+                    # Verificar si es un enlace de página numérico o "Siguiente"
+                    text = link.text.strip()
+                    if text == "Siguiente" or text.isdigit() or (text.startswith('<') and text.endswith('>') and text[1:-1].isdigit()):
+                        # Asegurarnos que pertenece a la categoría correcta
+                        if f"id={category_id}" in href:
+                            full_url = urljoin(BASE_URL, href)
+                            print(f"Detectado enlace de navegación: '{text}' -> {full_url}")
+                            new_links.add(full_url)
+                
+                # Si hay un enlace "Siguiente", lo registramos específicamente
+                siguiente_link = soup.find('a', string="Siguiente")
+                if siguiente_link and siguiente_link.get('href'):
+                    siguiente_url = urljoin(BASE_URL, siguiente_link['href'])
+                    if siguiente_url not in new_links:
+                        print(f"Enlace 'Siguiente' encontrado: {siguiente_url}")
+                        new_links.add(siguiente_url)
+                
+                return new_links
+            except Exception as e:
+                print(f"Error extrayendo enlaces de paginación de {url}: {str(e)}")
+                return set()
         
         # Comenzar con la primera página
         pages_to_check = set([base_url])
@@ -195,22 +243,51 @@ class OfertasBScraper:
             if not category_id:
                 raise ValueError("category_id is required")
 
-            base_url = f"{BASE_URL}/productos_cat.asp?id={category_id}"
-            pages = [base_url]  # Página inicial
-
-            # Obtener el contenido de la página inicial
-            page_content = self._fetch_page(base_url)
-            soup = BeautifulSoup(page_content, "html.parser")
-
-            # Buscar enlaces a otras páginas
-            pagination_links = soup.select("a[href*='productos_cat.asp?id={category_id}&pagina=']")
-            for link in pagination_links:
-                href = link.get("href")
-                if href:
-                    full_url = urljoin(BASE_URL, href)
-                    pages.append(full_url)
-
-            print(f"Páginas encontradas para la categoría {category_id}: {len(pages)}")
+            # Usar el método get_category_pages que es más robusto para encontrar todas las páginas
+            # ya que implementa una búsqueda recursiva de enlaces de paginación
+            pages = self.get_category_pages(category_id)
+            
+            if not pages:
+                # Como respaldo, usar el método directo de búsqueda de enlaces
+                base_url = f"{BASE_URL}/productos_cat.asp?id={category_id}"
+                pages = [base_url]  # Página inicial
+                
+                # Obtener el contenido de la página inicial
+                page_content = self._fetch_page(base_url)
+                soup = BeautifulSoup(page_content, "html.parser")
+                
+                # Buscar enlaces de paginación usando un selector CSS con el ID de categoría
+                pagination_links = soup.select(f"a[href*='productos_cat.asp?id={category_id}&pagina=']")
+                for link in pagination_links:
+                    href = link.get("href")
+                    if href:
+                        full_url = urljoin(BASE_URL, href)
+                        if full_url not in pages:  # Evitar duplicados
+                            pages.append(full_url)
+                
+                # Buscar específicamente el enlace "Siguiente" para asegurarnos de no perder páginas
+                siguiente_link = soup.find('a', string="Siguiente")
+                if siguiente_link and siguiente_link.get('href'):
+                    siguiente_url = urljoin(BASE_URL, siguiente_link['href'])
+                    if siguiente_url not in pages:
+                        print(f"Añadiendo enlace 'Siguiente' a las páginas a procesar: {siguiente_url}")
+                        pages.append(siguiente_url)
+                            
+            # Eliminar duplicados y ordenar para procesar las páginas en orden
+            # La ordenación asegura que procesamos las páginas numéricamente (1, 2, 3...)
+            pages = sorted(list(set(pages)))
+            
+            # Determinar el número máximo de páginas encontradas (útil para depuración)
+            max_page_num = 1
+            for page in pages:
+                if 'pagina=' in page:
+                    try:
+                        page_num = int(page.split('pagina=')[-1].split('&')[0])
+                        max_page_num = max(max_page_num, page_num)
+                    except ValueError:
+                        pass
+            
+            print(f"Páginas encontradas para la categoría {category_id}: {len(pages)} (máximo número de página: {max_page_num})")
             
             # Mantener el progreso de categorías visible en la consola
             with tqdm.tqdm(total=len(pages), desc=f"Procesando categoría {category_id}", position=0, leave=True) as pbar:
@@ -362,7 +439,7 @@ class OfertasBScraper:
         
         return details
 
-    def process_product_card(self, product_table: BeautifulSoup, category_id: str) -> Dict:
+    def process_product_card(self, product_table: BeautifulSoup, category_id: int) -> Dict:
         """Extract product information from a product table without visiting the product page."""
         try:
             # Obtener enlace del producto y extraer el ID
@@ -376,13 +453,34 @@ class OfertasBScraper:
             else:
                 raise ValueError("Could not find product link")
 
-            # Obtener imagen del producto
+            # Obtener imagen en miniatura como fallback
             img_elem = img_row.find('img')
             if not img_elem or not img_elem.get('src'):
-                logging.warning(f"No image_file_url for product {external_product_id}")
+                logging.warning(f"No thumbnail image for product {external_product_id}")
                 list_image = None
             else:
                 list_image = urljoin(BASE_URL, img_elem['src'])
+                
+            # Obtener imagen de alta calidad de la página de detalle del producto
+            try:
+                print(f"Obteniendo imagen de alta calidad para producto {external_product_id}")
+                detail_url = f"{BASE_URL}/productos_full.asp?id={external_product_id}"
+                detail_html = self._fetch_page(detail_url)
+                detail_soup = BeautifulSoup(detail_html, 'html.parser')
+                
+                # Buscar la imagen de alta resolución en la página de detalle
+                main_content = detail_soup.find('div', {'id': 'content'}) or detail_soup
+                img = main_content.find('img', src=lambda x: x and ('upload' in x or 'images' in x))
+                
+                if img and img.get('src'):
+                    high_res_image = urljoin(BASE_URL, img['src'])
+                    print(f"Imagen de alta calidad encontrada: {high_res_image}")
+                    list_image = high_res_image  # Reemplazar la miniatura con la imagen de alta calidad
+                else:
+                    print(f"No se encontró imagen de alta calidad, usando miniatura: {list_image}")
+            except Exception as img_error:
+                print(f"Error al obtener imagen de alta calidad: {str(img_error)}")
+                # Mantener la imagen en miniatura como respaldo
 
             # Obtener nombre y precio desde la tabla de la categoría
             name_cell = product_table.select_one('tr td[colspan="1"]')
@@ -446,6 +544,33 @@ class OfertasBScraper:
         """Scrape a single category or all categories"""
         categories = ([c for c in self.get_categories() if c['external_id'] == category_id] 
                      if category_id else self.get_categories())
+
+        # Verificar y utilizar categorías existentes en Supabase
+        for category in categories:
+            try:
+                existing_category = self.supabase.client.table("categories").select("id").eq("external_id", category["external_id"]).execute()
+                if existing_category.data:
+                    print(f"Categoría existente encontrada: {category['name']} (ID: {category['external_id']})")
+                    # Asegurarse de que category tenga el campo 'id' de Supabase
+                    category['supabase_id'] = existing_category.data[0]['id']
+                    print(f"ID en Supabase para categoría {category['external_id']}: {category['supabase_id']}")
+                else:
+                    print(f"Insertando nueva categoría: {category['name']} (ID: {category['external_id']})")
+                    result = self.supabase.client.table("categories").insert({
+                        "external_id": category["external_id"],
+                        "name": category["name"],
+                        "source_url": category["source_url"],
+                        "last_crawled_at": datetime.utcnow().isoformat(),
+                        "seller_id": 1
+                    }).execute()
+                    
+                    if result.data:
+                        category['supabase_id'] = result.data[0]['id']
+                        print(f"Nueva categoría insertada con ID en Supabase: {category['supabase_id']}")
+                    else:
+                        print(f"⚠️ Advertencia: No se pudo obtener ID después de insertar categoría {category['external_id']}")
+            except Exception as e:
+                print(f"Error al procesar categoría {category['external_id']}: {str(e)}")
 
         # Cargar productos existentes
         self._load_existing_products(category_id)
@@ -594,11 +719,39 @@ class OfertasBScraper:
             product_progress = tqdm.tqdm(total=total_products, desc=f"Procesando productos en {page_url}", unit="producto")
 
             for product_table in product_tables:
-                product_data = self.process_product_card(product_table, category['external_id'])
-                if product_data:
-                    result = self.supabase.upsert_product(product_data)
-                    if result:
-                        print(f"Producto {product_data['external_product_id']} procesado exitosamente.")
+                # Antes de procesar el producto, asegurémonos de que la categoría existe en Supabase
+                try:
+                    # Usamos el external_id para encontrar la categoría en Supabase
+                    cat_response = self.supabase.client.table("categories").select("id, external_id").eq("external_id", category['external_id']).execute()
+                    
+                    if not cat_response.data:
+                        print(f"⚠️ La categoría {category['external_id']} no existe en Supabase. Insertándola...")
+                        cat_result = self.supabase.client.table("categories").insert({
+                            "external_id": category['external_id'],
+                            "name": category['name'],
+                            "source_url": category.get('source_url', ''),
+                            "last_crawled_at": datetime.utcnow().isoformat(),
+                            "seller_id": 1
+                        }).execute()
+                        
+                        if cat_result.data:
+                            internal_cat_id = cat_result.data[0]['id']  # ID interno en Supabase
+                            print(f"✅ Categoría {category['external_id']} insertada con ID interno: {internal_cat_id}")
+                        else:
+                            print(f"❌ Error al insertar categoría {category['external_id']}")
+                            continue
+                    else:
+                        internal_cat_id = cat_response.data[0]['id']  # ID interno en Supabase
+                        print(f"✅ Categoría {category['external_id']} ya existe con ID interno: {internal_cat_id}")
+                    
+                    # Procesamos el producto pasando el ID interno de la categoría
+                    product_data = self.process_product_card(product_table, internal_cat_id)
+                    if product_data:
+                        result = self.supabase.upsert_product(product_data)
+                        if result:
+                            print(f"Producto {product_data['external_product_id']} procesado exitosamente.")
+                except Exception as e:
+                    print(f"Error al procesar categoría {category['external_id']}: {str(e)}")
                 product_progress.update(1)
 
             product_progress.close()

@@ -1,5 +1,6 @@
 import './globals.css'
 import { cn } from '@/lib/utils'
+import Link from 'next/link';
 
 export const metadata = {
   title: 'Catálogo Premium - Los mejores productos al mejor precio',
@@ -32,6 +33,16 @@ export default function RootLayout({ children }) {
         "selection:bg-primary/20 selection:text-primary-foreground"
       )}>
         <div className="relative flex min-h-screen flex-col">
+          <nav className="bg-gray-100 p-4 shadow-md">
+            <ul className="flex space-x-4">
+              <li>
+                <Link href="/">Inicio</Link>
+              </li>
+              <li>
+                <Link href="/product-overview">Resumen de Productos</Link>
+              </li>
+            </ul>
+          </nav>
           <div className="flex-1">
             {children}
           </div>

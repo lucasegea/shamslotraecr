@@ -2,13 +2,30 @@ from datetime import datetime
 import os
 from typing import Dict, Any
 from supabase import create_client, Client
+from dotenv import load_dotenv
+
+# Cargar variables de entorno desde el archivo .env
+load_dotenv()
 
 class SupabaseClient:
     def __init__(self):
         url = os.getenv("SUPABASE_URL")
         key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        # Debug / safety: show masked values and ensure service role key is present
+        def _mask(v: str, keep: int = 6):
+            if not v:
+                return None
+            if len(v) <= keep:
+                return "***"
+            return v[:keep] + "..." + v[-4:]
+
+        masked_url = _mask(url, keep=20) if url else None
+        masked_key = _mask(key, keep=6) if key else None
+        print(f"Supabase URL: {masked_url}")
+        print(f"SUPABASE_SERVICE_ROLE_KEY present: {bool(key)}, value: {masked_key}")
+
         if not url or not key:
-            raise ValueError("Missing Supabase environment variables")
+            raise ValueError("Missing Supabase environment variables: ensure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set in .env and load_dotenv() runs before creating the client")
         
         self.client: Client = create_client(url, key)
         self._ensure_schema()
@@ -70,7 +87,7 @@ class SupabaseClient:
             
             # Preparar los datos del producto asegurándonos de que son del tipo correcto
             product = {
-                "category_id": str(product_data["category_id"]),
+                "category_id": int(product_data["category_id"]), # Esto es el ID interno de la categoría en Supabase
                 "external_product_id": str(product_data["external_product_id"]),
                 "seller_id": 1,  # ID fijo para OfertasB
                 "name": str(product_data["name"]),
@@ -179,3 +196,18 @@ class SupabaseClient:
         except Exception as e:
             print(f"Error uploading image for product {product_id}: {str(e)}")
             return None
+    
+    def test_connection(self) -> bool:
+        """Test the connection to Supabase with a simple select on the `categories` table.
+
+        This avoids relying on a custom RPC and provides a reliable smoke test.
+        """
+        try:
+            resp = self.client.table("categories").select("id,name").limit(1).execute()
+            status = getattr(resp, "status_code", None)
+            print("Connection test status:", status)
+            print("Response data:", getattr(resp, "data", None))
+            return True
+        except Exception as e:
+            print("Connection failed:", e)
+            return False

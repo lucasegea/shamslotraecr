@@ -43,7 +43,7 @@ export async function getCategories() {
       })
     }
 
-    return categoriesWithActualCounts.filter(cat => cat.product_count > 0)
+    return categoriesWithActualCounts // Removed filter for product_count > 0
   } catch (error) {
     console.error('Error in getCategories:', error)
     return []
