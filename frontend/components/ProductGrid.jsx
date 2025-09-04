@@ -22,14 +22,14 @@ const item = {
 
 function ProductSkeleton() {
   return (
-    <Card className="overflow-hidden animate-pulse">
-      <CardContent className="p-4">
-        <div className="flex gap-4">
-          <div className="w-20 h-20 bg-muted rounded-lg" />
+    <Card className="overflow-hidden animate-pulse h-full">
+      <CardContent className="p-4 h-full">
+        <div className="flex flex-col gap-4 h-full">
+          <div className="aspect-square w-full bg-muted rounded-lg" />
           <div className="flex-1 space-y-3">
             <div className="h-4 bg-muted rounded w-3/4" />
             <div className="h-6 bg-muted rounded w-1/2" />
-            <div className="h-8 bg-muted rounded" />
+            <div className="h-8 bg-muted rounded mt-auto" />
           </div>
         </div>
       </CardContent>
@@ -76,7 +76,7 @@ export default function ProductGrid({
 }) {
   if (loading) {
     return (
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 auto-rows-fr">
         {Array.from({ length: 8 }).map((_, i) => (
           <ProductSkeleton key={i} />
         ))}
@@ -97,7 +97,7 @@ export default function ProductGrid({
       variants={container}
       initial="hidden"
       animate="show"
-      className="grid grid-cols-1 lg:grid-cols-2 gap-4"
+      className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 auto-rows-fr"
     >
       {products.map((product) => (
         <motion.div key={product.id} variants={item}>

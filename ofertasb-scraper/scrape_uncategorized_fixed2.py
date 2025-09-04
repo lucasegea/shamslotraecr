@@ -14,11 +14,16 @@ import random
 import argparse
 import httpx
 import tqdm
+import io
+import hashlib
 from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
 from datetime import datetime
 from supabase import create_client
 from dotenv import load_dotenv
+import uuid
+import base64
+from utils.price import parse_price
 
 # Cargar variables de entorno
 load_dotenv()
@@ -28,6 +33,10 @@ BASE_URL = "https://www.ofertasb.com"
 SLEEP_MIN = 1.0  # Tiempo mínimo de espera entre solicitudes (segundos)
 SLEEP_MAX = 2.0  # Tiempo máximo de espera entre solicitudes (segundos)
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"
+
+# Carpeta de destino para imágenes en Supabase Storage
+IMAGE_BUCKET = "product-images"  # Nombre del bucket en Supabase Storage
+UNCATEGORIZED_FOLDER = "sin categoria"  # Carpeta específica para productos sin categoría
 
 class UncategorizedScraper:
     def __init__(self):
@@ -56,7 +65,9 @@ class UncategorizedScraper:
             "uncategorized_products": 0,
             "new_products": 0,
             "existing_products": 0,
-            "errors": 0
+            "errors": 0,
+            "images_saved": 0,
+            "image_errors": 0
         }
     
     def setup_supabase(self):
@@ -150,31 +161,35 @@ class UncategorizedScraper:
                 # Calcular offset para esta página
                 offset = current_page * page_size
                 
-                # Realizar la consulta con paginación
-                result = self.supabase.table("products").select("external_product_id").range(offset, offset + page_size - 1).execute()
+                # Consultar esta página de productos
+                result = self.supabase.table("products") \
+                    .select("external_product_id") \
+                    .range(offset, offset + page_size - 1) \
+                    .execute()
                 
-                # Si no hay más datos o la respuesta está vacía, salimos del bucle
                 if not result.data or len(result.data) == 0:
+                    # No hay más productos, salir del bucle
                     break
                 
-                # Agregar los productos de esta página
+                # Agregar productos a la lista
                 all_products.extend(result.data)
                 total_fetched += len(result.data)
-                print(f"  Cargados {total_fetched} productos ({current_page + 1} páginas)...")
+                print(f"  Cargados {total_fetched} productos hasta ahora...")
                 
-                # Si obtenemos menos del tamaño de página, hemos terminado
+                # Comprobar si hemos llegado al final
                 if len(result.data) < page_size:
                     break
                 
                 # Avanzar a la siguiente página
                 current_page += 1
             
-            if not all_products:
-                print("⚠️ No se encontraron productos existentes")
-                return {}
+            # Convertir a diccionario para búsqueda rápida
+            self.existing_products = {
+                str(product["external_product_id"]): True 
+                for product in all_products
+            }
             
-            self.existing_products = {str(product["external_product_id"]): True for product in all_products}
-            print(f"✅ Se cargaron {len(self.existing_products)} productos existentes")
+            print(f"✅ Total de productos existentes cargados: {len(self.existing_products)}")
             return self.existing_products
             
         except Exception as e:
@@ -182,71 +197,54 @@ class UncategorizedScraper:
             return {}
     
     def fetch_page(self, url):
-        """Obtener el contenido de una página con manejo de errores y esperas"""
+        """Obtener el contenido HTML de una página"""
         try:
-            # Esperar un tiempo aleatorio para ser amigable con el servidor
-            sleep_time = random.uniform(SLEEP_MIN, SLEEP_MAX)
-            time.sleep(sleep_time)
+            print(f"Descargando: {url}")
             
+            # Añadir un retraso aleatorio para evitar detección
+            time.sleep(random.uniform(SLEEP_MIN, SLEEP_MAX))
+            
+            # Hacer la solicitud HTTP
             response = self.session.get(url)
-            response.raise_for_status()
             
-            # Verificar que el contenido parece ser HTML válido
-            content = response.text
-            if not content or len(content) < 100:
-                print(f"⚠️ La página {url} devolvió contenido muy corto o vacío")
+            if response.status_code != 200:
+                print(f"⚠️ Código de estado HTTP inesperado: {response.status_code}")
+                return None
             
-            return content
+            # Comprobar si el HTML es válido
+            html_content = response.text
+            if not html_content or len(html_content) < 1000:
+                print(f"⚠️ Contenido HTML demasiado pequeño: {len(html_content)} bytes")
+                return None
+            
+            return html_content
             
         except Exception as e:
             print(f"❌ Error obteniendo la página {url}: {str(e)}")
             return None
-            
-    def debug_page_content(self, html):
-        """Analizar el contenido de una página para depuración"""
-        if not html:
-            print("❌ No hay contenido HTML para depurar")
-            return
-            
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # Verificar el título
-        title = soup.title
-        print(f"📄 Título: {title.text if title else 'No encontrado'}")
-        
-        # Contar elementos clave
-        links = len(soup.find_all('a'))
-        tables = len(soup.find_all('table'))
-        images = len(soup.find_all('img'))
-        
-        print(f"📊 Elementos encontrados: {links} enlaces, {tables} tablas, {images} imágenes")
-        
-        # Buscar términos específicos en el HTML
-        producto_mentions = len(re.findall(r'producto', html.lower()))
-        categoria_mentions = len(re.findall(r'categoria', html.lower()))
-        
-        print(f"🔍 Menciones: 'producto' ({producto_mentions}), 'categoria' ({categoria_mentions})")
-        
-        # Verificar si parece ser una redirección o página de error
-        if "error" in html.lower() or "404" in html or "no encontrado" in html.lower():
-            print("⚠️ La página parece ser una página de error")
-        
-        # Verificar el tamaño del HTML
-        print(f"📏 Tamaño del HTML: {len(html)} caracteres")
     
     def get_total_pages(self):
-        """Obtener el número total de páginas de productos"""
+        """Determinar el número total de páginas a procesar"""
         try:
-            html = self.fetch_page(f"{BASE_URL}/productos_cat.asp")
+            print("Determinando el número total de páginas...")
+            first_page_url = f"{BASE_URL}/productos_cat.asp"
+            
+            html = self.fetch_page(first_page_url)
             if not html:
                 return 0
                 
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Buscar links de paginación
-            pagination_links = soup.find_all("a", href=lambda href: href and "productos_cat.asp" in href and "pagina=" in href)
+            # Buscar enlaces de paginación
+            pagination_links = soup.find_all("a", href=lambda href: href and "pagina=" in href)
             
+            if not pagination_links:
+                print("⚠️ No se encontraron enlaces de paginación")
+                return 1  # Asumimos que solo hay una página
+            
+            # Encontrar el número de página más alto
             max_page = 1
+            
             for link in pagination_links:
                 href = link.get("href", "")
                 match = re.search(r"pagina=(\d+)", href)
@@ -300,53 +298,45 @@ class UncategorizedScraper:
                     href = f"{BASE_URL}/{href}"
                 product_links.append(href)
             
-            # Método 2: Buscar en tablas (común en sitios más antiguos)
-            if len(product_links) < 5:  # Si encontramos muy pocos productos, buscar más
-                tables = soup.find_all("table")
-                table_links = []
-                
-                for table in tables:
-                    # Buscar enlaces dentro de las tablas
-                    for a_tag in table.find_all("a", href=lambda href: href and ("productos_det.asp" in href or "id=" in href)):
-                        href = a_tag.get("href", "")
-                        if "productos_det.asp" in href:
-                            if href.startswith("/"):
-                                href = f"{BASE_URL}{href}"
-                            elif not href.startswith("http"):
-                                href = f"{BASE_URL}/{href}"
-                            table_links.append(href)
-                
-                print(f"Método 2: Encontrados {len(table_links)} enlaces en tablas")
-                product_links.extend(table_links)
+            # Método 2: Enlaces dentro de divs de producto
+            product_containers = soup.select(".product, .item, .product-container, .product-item")
+            print(f"Método 2: Encontrados {len(product_containers)} contenedores de producto")
             
-            # Método 3: Buscar en divs con clases específicas
-            product_divs = soup.find_all("div", class_=lambda cls: cls and ("product" in cls.lower() or "item" in cls.lower()))
-            div_links = []
-            
-            for div in product_divs:
-                for a_tag in div.find_all("a", href=True):
-                    href = a_tag.get("href", "")
-                    # Si parece un enlace a un producto
-                    if "productos_det.asp" in href or re.search(r'id=\d+', href):
+            for container in product_containers:
+                links = container.find_all("a", href=True)
+                for link in links:
+                    href = link.get("href", "")
+                    if "productos_det.asp" in href:
                         if href.startswith("/"):
                             href = f"{BASE_URL}{href}"
                         elif not href.startswith("http"):
                             href = f"{BASE_URL}/{href}"
-                        div_links.append(href)
+                        product_links.append(href)
             
-            print(f"Método 3: Encontrados {len(div_links)} enlaces en divs de productos")
-            product_links.extend(div_links)
+            # Método 3: Enlaces con imágenes de producto
+            img_links = []
+            for img in soup.find_all("img"):
+                parent_a = img.find_parent("a", href=lambda href: href and "productos_det.asp" in href)
+                if parent_a:
+                    href = parent_a.get("href", "")
+                    if href.startswith("/"):
+                        href = f"{BASE_URL}{href}"
+                    elif not href.startswith("http"):
+                        href = f"{BASE_URL}/{href}"
+                    img_links.append(href)
             
-            # Método 4: Buscar por contenido de imagen y texto
+            print(f"Método 3: Encontrados {len(img_links)} enlaces con imágenes de producto")
+            product_links.extend(img_links)
+            
+            # Método 4: Enlaces con texto o contenido relacionado a productos
+            product_keywords = ["detalle", "producto", "comprar", "ver", "más info", "más información"]
             potential_product_links = []
             
-            for a_tag in soup.find_all("a", href=lambda href: href and ("productos_det.asp" in href or "id=" in href)):
-                # Los enlaces a productos suelen tener imágenes o textos de producto
-                has_img = a_tag.find("img") is not None
-                text_content = a_tag.text.strip().lower()
+            for a_tag in soup.find_all("a", href=True):
+                text_content = a_tag.get_text().lower()
                 
-                # Palabras clave que sugieren que es un producto
-                product_keywords = ["comprar", "precio", "oferta", "producto", "detalles"]
+                # Buscar imágenes dentro del enlace
+                has_img = a_tag.find("img") is not None
                 has_keyword = any(keyword in text_content for keyword in product_keywords)
                 
                 if has_img or has_keyword:
@@ -432,26 +422,76 @@ class UncategorizedScraper:
                 print(f"✅ Producto {product_id} ya existe en la base de datos")
                 return None
             
-            # Extraer nombre del producto
+            # MEJORA 1: Extracción más precisa del nombre del producto
             name = None
-            # Intentar varios selectores para el nombre
-            for selector in [
-                "h1", 
-                "h2", 
-                "div.product-name", 
-                "div.title", 
-                "td.product-name", 
-                ".product-info h1",
-                ".product-details h2"
-            ]:
-                name_elem = soup.select_one(selector)
-                if name_elem:
-                    name = name_elem.text.strip()
-                    print(f"Nombre encontrado con selector '{selector}': {name}")
-                    break
+
+            # Método usado en el scraper original
+            try:
+                # Intentar usar la misma lógica que en el scraper original
+                detail_url = f"{BASE_URL}/productos_full.asp?id={product_id}"
+                detail_html = self.fetch_page(detail_url)
+                if detail_html:
+                    detail_soup = BeautifulSoup(detail_html, 'html.parser')
                     
+                    # Buscar tablas con contenido de producto
+                    product_tables = detail_soup.find_all("table", id="customers")
+                    for table in product_tables:
+                        name_cell = table.select_one('tr td[colspan="1"]')
+                        if name_cell and name_cell.get_text(strip=True):
+                            name = name_cell.get_text(strip=True)
+                            print(f"Nombre encontrado usando método del scraper original: {name}")
+                            break
+            except Exception as e:
+                print(f"Error intentando extraer nombre con método original: {str(e)}")
+                
+            # Si el método original falló, usar métodos alternativos
             if not name:
-                # Buscar por texto en negrita que podría ser un título
+                # Método 1: Buscar en tablas principales (común en OfertasB)
+                tables = soup.find_all("table")
+                for table in tables:
+                    # Buscar celdas con colspan que suelen contener títulos de productos
+                    name_cells = table.select('tr td[colspan="1"], tr td[colspan="2"], tr td[colspan="3"]')
+                    for cell in name_cells:
+                        text = cell.get_text(strip=True)
+                        if len(text) > 10 and "ofertasb" not in text.lower():
+                            name = text
+                            print(f"Nombre encontrado en celda de tabla: {name}")
+                            break
+                    if name:
+                        break
+            
+            # Método 2: Buscar en h1 o h2 principal
+            if not name:
+                heading_tags = soup.find_all(['h1', 'h2'], limit=3)
+                for tag in heading_tags:
+                    # Filtrar textos cortos o genéricos
+                    text = tag.text.strip()
+                    if len(text) > 10 and text.lower() != "ofertasb" and "oferta" not in text.lower():
+                        name = text
+                        print(f"Nombre encontrado en elemento {tag.name}: {name}")
+                        break
+                        
+            # Método 3: Buscar en elementos específicos si no se encontró
+            if not name:
+                # Intentar varios selectores para el nombre
+                for selector in [
+                    "div.product-name", 
+                    "div.title", 
+                    "td.product-name", 
+                    ".product-info h1",
+                    ".product-details h2",
+                    "div.producto-nombre",
+                    "div.product-title",
+                    "span.product-title"
+                ]:
+                    name_elem = soup.select_one(selector)
+                    if name_elem and len(name_elem.text.strip()) > 10:
+                        name = name_elem.text.strip()
+                        print(f"Nombre encontrado con selector '{selector}': {name}")
+                        break
+                    
+            # Método 4: Buscar por texto en negrita que podría ser un título
+            if not name:
                 bold_elems = soup.find_all(['b', 'strong'])
                 for elem in bold_elems:
                     if len(elem.text.strip()) > 10:  # Suficientemente largo para ser un título
@@ -459,69 +499,151 @@ class UncategorizedScraper:
                         print(f"Nombre encontrado en elemento bold: {name}")
                         break
                         
-            # Si todavía no se ha encontrado, usar un fallback
+            # Método 5: Buscar texto cercano a "Título" o "Producto"
             if not name:
-                name = "Producto sin nombre"
+                title_labels = soup.find_all(string=lambda s: s and any(x in s.lower() for x in ["título", "titulo", "producto", "nombre"]))
+                for label in title_labels:
+                    # Buscar el texto adyacente o siguiente elemento
+                    next_elem = label.next_element
+                    if next_elem and isinstance(next_elem, str):
+                        if len(next_elem.strip()) > 10:
+                            name = next_elem.strip()
+                            print(f"Nombre encontrado tras etiqueta: {name}")
+                            break
+                    # O buscar en el padre para casos como <td>Título: Producto XYZ</td>
+                    parent_text = label.parent.text.strip()
+                    if ":" in parent_text:
+                        possible_name = parent_text.split(":", 1)[1].strip()
+                        if len(possible_name) > 10:
+                            name = possible_name
+                            print(f"Nombre encontrado tras etiqueta en texto padre: {name}")
+                            break
+                        
+            # Fallback si todavía no se ha encontrado
+            if not name:
+                name = f"Producto sin nombre {product_id}"
                 print(f"⚠️ No se pudo encontrar el nombre del producto {product_id}")
             
-            # Extraer precio usando múltiples estrategias
+            # Asegurarnos de que el nombre no es "Lista de productos" ni otra texto genérico
+            if "lista de productos" in name.lower() or "listado de productos" in name.lower():
+                name = f"Producto sin categoría {product_id}"
+                print(f"⚠️ Nombre genérico detectado, cambiado a: {name}")
+            
+            # MEJORA 2: Mejor extracción de precio con símbolo ₡
             price_raw = None
             price_numeric = None
             currency = "CRC"  # Por defecto, colones costarricenses
             
-            # Método 1: Buscar en div.price
-            price_elem = soup.find("div", class_="price")
-            if price_elem:
-                price_raw = price_elem.text.strip()
-                print(f"Precio encontrado (div.price): {price_raw}")
-                
-            # Método 2: Buscar en span.price
-            if not price_raw:
-                price_span = soup.find("span", class_="price")
-                if price_span:
-                    price_raw = price_span.text.strip()
-                    print(f"Precio encontrado (span.price): {price_raw}")
+            # Método 1: Buscar patrones de precio con símbolo ₡ directamente en el HTML
+            price_patterns = [
+                r'₡\s?[\d.,]+',  # ₡ seguido de números
+                r'¢\s?[\d.,]+',   # ¢ seguido de números (símbolo alternativo)
+                r'CRC\s?[\d.,]+',  # CRC seguido de números
+                r'colones\s?[\d.,]+',  # "colones" seguido de números
+                r'precio:\s?[\d.,]+',  # "precio:" seguido de números
+                r'precio\s?[\d.,]+',   # "precio" seguido de números
+                r'cuesta\s?[\d.,]+',   # "cuesta" seguido de números
+                r'valor\s?[\d.,]+',    # "valor" seguido de números
+            ]
             
-            # Método 3: Buscar tabla con información de precio
+            for pattern in price_patterns:
+                match = re.search(pattern, html, re.IGNORECASE)
+                if match:
+                    price_raw = match.group(0).strip()
+                    print(f"Precio encontrado (regex directo): {price_raw}")
+                    break
+                    
+            # Método 2: Buscar en elementos específicos si no se encontró con regex
             if not price_raw:
-                price_label = soup.find(["td", "th"], string=lambda s: s and "precio" in s.lower())
+                price_selectors = [
+                    "div.price", "span.price", "div.precio", "span.precio",
+                    ".product-price", ".price-value", ".valor", ".monto"
+                ]
+                
+                for selector in price_selectors:
+                    price_elem = soup.select_one(selector)
+                    if price_elem:
+                        price_text = price_elem.text.strip()
+                        # Verificar que contiene dígitos
+                        if re.search(r'\d', price_text):
+                            price_raw = price_text
+                            print(f"Precio encontrado ({selector}): {price_raw}")
+                            break
+            
+            # Método 3: Buscar texto cerca de "Precio" o "Valor"
+            if not price_raw:
+                price_labels = soup.find_all(string=lambda s: s and any(x in s.lower() for x in ["precio", "valor", "costo"]))
+                for label in price_labels:
+                    parent = label.parent
+                    # Buscar texto adyacente
+                    if parent.next_sibling and isinstance(parent.next_sibling, str):
+                        text = parent.next_sibling.strip()
+                        if re.search(r'\d', text):
+                            price_raw = text
+                            print(f"Precio encontrado en texto adyacente: {price_raw}")
+                            break
+                    # Buscar siguiente elemento
+                    next_elem = parent.next_sibling
+                    while next_elem and isinstance(next_elem, str) and not next_elem.strip():
+                        next_elem = next_elem.next_sibling
+                    
+                    if next_elem and hasattr(next_elem, 'text'):
+                        text = next_elem.text.strip()
+                        if re.search(r'\d', text):
+                            price_raw = text
+                            print(f"Precio encontrado en elemento adyacente: {price_raw}")
+                            break
+            
+            # Método 4: Buscar en tablas de información
+            if not price_raw:
+                price_label = soup.find(["td", "th"], string=lambda s: s and any(x in s.lower() for x in ["precio", "valor", "costo"]))
                 if price_label:
                     next_cell = price_label.find_next_sibling("td")
                     if next_cell:
-                        price_raw = next_cell.text.strip()
-                        print(f"Precio encontrado (tabla): {price_raw}")
-                        
-            # Método 4: Buscar cualquier texto que parezca un precio en colones
-            if not price_raw:
-                price_patterns = [
-                    r'₡\s?[\d.,]+',  # ₡ seguido de números
-                    r'CRC\s?[\d.,]+',  # CRC seguido de números
-                    r'colones\s?[\d.,]+',  # "colones" seguido de números
-                    r'precio:\s?[\d.,]+',  # "precio:" seguido de números
-                ]
-                
-                for pattern in price_patterns:
-                    match = re.search(pattern, html, re.IGNORECASE)
-                    if match:
-                        price_raw = match.group(0).strip()
-                        print(f"Precio encontrado (regex): {price_raw}")
-                        break
+                        price_text = next_cell.text.strip()
+                        if re.search(r'\d', price_text):
+                            price_raw = price_text
+                            print(f"Precio encontrado en tabla: {price_raw}")
             
-            # Extraer valor numérico del precio
+            # Si encontramos un precio, extraer valor numérico
             if price_raw:
-                # Intentar extraer el valor numérico
-                price_match = re.search(r'[\d\.,]+', price_raw)
-                if price_match:
-                    price_str = price_match.group(0).replace(".", "").replace(",", ".")
-                    try:
-                        price_numeric = float(price_str)
-                        print(f"Precio numérico extraído: {price_numeric}")
-                    except ValueError:
-                        price_numeric = None
-                        print(f"⚠️ No se pudo convertir {price_str} a número")
+                try:
+                    # Añadir el símbolo ₡ si no lo tiene pero contiene números
+                    if not any(symbol in price_raw for symbol in ['₡', '¢', '$']) and re.search(r'\d', price_raw):
+                        price_raw = f"₡{price_raw}"
+                        print(f"Agregado símbolo ₡ al precio: {price_raw}")
+                    
+                    # Intentar extraer el valor numérico usando nuestra función de utilidad
+                    price_raw, price_numeric = parse_price(price_raw)
+                    print(f"Precio procesado: {price_raw} -> {price_numeric}")
+                    
+                except ValueError:
+                    # Si falla, intentar extracción directa
+                    price_match = re.search(r'[\d\.,]+', price_raw)
+                    if price_match:
+                        price_str = price_match.group(0).replace(".", "").replace(",", ".")
+                        try:
+                            price_numeric = float(price_str)
+                            print(f"Precio numérico extraído manualmente: {price_numeric}")
+                        except ValueError:
+                            price_numeric = None
+                            print(f"⚠️ No se pudo convertir {price_str} a número")
             
-            # Extraer imagen usando múltiples estrategias
+            # Si no se encuentra precio numérico o contiene "negociable", establecer correctamente
+            if not price_numeric:
+                # Verificar si tiene texto sobre negociación
+                if any(term in html.lower() for term in ["negociable", "a convenir", "consultar precio"]):
+                    price_raw = "Negociable con vendedor"
+                    price_numeric = None
+                    print(f"Precio detectado como negociable")
+                else:
+                    price_raw = "Precio no disponible"
+                    price_numeric = None
+                    print(f"⚠️ No se pudo encontrar un precio")
+            
+            # MEJORA 3: Mejor extracción y almacenamiento de imágenes en carpeta específica
             image_url = None
+            image_stored_url = None
             
             # Método 1: Buscar en div#content
             main_content = soup.find('div', {'id': 'content'})
@@ -564,6 +686,53 @@ class UncategorizedScraper:
                 elif not image_url.startswith('http'):
                     image_url = f"{BASE_URL}/{image_url}"
                 print(f"URL de imagen normalizada: {image_url}")
+                
+                # Descargar y guardar la imagen en Supabase Storage en carpeta específica
+                try:
+                    # Descargar la imagen
+                    response = self.session.get(image_url)
+                    if response.status_code == 200:
+                        # Generar nombre de archivo único
+                        image_extension = image_url.split('.')[-1] if '.' in image_url else 'jpg'
+                        if len(image_extension) > 4 or not image_extension.isalpha():  # Si la extensión es inválida
+                            image_extension = 'jpg'
+                            
+                        filename = f"{product_id}_{uuid.uuid4().hex[:8]}.{image_extension}"
+                        storage_path = f"{UNCATEGORIZED_FOLDER}/{filename}"
+                        
+                        # Guardar en Supabase Storage
+                        image_data = response.content
+                        
+                        try:
+                            # Intentar subir la imagen
+                            result = self.supabase.storage.from_(IMAGE_BUCKET).upload(
+                                path=storage_path,
+                                file=image_data,
+                                file_options={"content-type": f"image/{image_extension}"}
+                            )
+                            
+                            # Si llegamos aquí, la carga fue exitosa
+                            # Obtener la URL pública
+                            try:
+                                public_url = self.supabase.storage.from_(IMAGE_BUCKET).get_public_url(storage_path)
+                                print(f"✅ Imagen guardada en Supabase: {storage_path}")
+                                print(f"URL pública: {public_url}")
+                                image_stored_url = public_url
+                                self.stats["images_saved"] += 1
+                            except Exception as url_error:
+                                print(f"⚠️ Error obteniendo URL pública: {str(url_error)}")
+                                self.stats["image_errors"] += 1
+                                
+                        except Exception as upload_error:
+                            print(f"⚠️ Error durante la carga: {str(upload_error)}")
+                            self.stats["image_errors"] += 1
+                    else:
+                        print(f"⚠️ Error descargando imagen, status: {response.status_code}")
+                        self.stats["image_errors"] += 1
+                        
+                except Exception as e:
+                    print(f"❌ Error procesando imagen: {str(e)}")
+                    self.stats["image_errors"] += 1
             
             # VERIFICACIÓN DE CATEGORÍA - PARTE CRÍTICA
             is_uncategorized = False
@@ -652,15 +821,18 @@ class UncategorizedScraper:
                 "external_product_id": product_id,
                 "name": name,
                 "product_url": url,
-                "image_url": image_url,
+                "image_url": image_stored_url or image_url,  # Usar URL de Supabase si está disponible
                 "price_raw": price_raw,
                 "price_numeric": price_numeric,
                 "currency": currency,
                 "first_seen_at": datetime.utcnow().isoformat(),
                 "last_seen_at": datetime.utcnow().isoformat(),
                 "seller_id": 1,
-                "source_html": html,  # Guardar HTML completo para procesamiento futuro
+                "source_html_hash": hashlib.md5(html.encode('utf-8')).hexdigest()
             }
+            
+            # Guardar HTML completo para referencia, pero no en la base de datos
+            product_data["source_html"] = html
             
             # Asignar categoría basado en nuestro análisis
             if is_uncategorized:
@@ -720,6 +892,39 @@ class UncategorizedScraper:
         except Exception as e:
             print(f"❌ Error guardando producto {product_data.get('external_product_id')}: {str(e)}")
             return False
+    
+    def debug_page_content(self, html):
+        """Mostrar información de depuración sobre el contenido de la página"""
+        if not html:
+            print("⚠️ HTML vacío o nulo")
+            return
+            
+        soup = BeautifulSoup(html, 'html.parser')
+        
+        # Extraer y mostrar título
+        title = soup.title.text if soup.title else "Sin título"
+        print(f"📄 Título de la página: {title}")
+        
+        # Mostrar elementos principales
+        print("📋 Elementos principales:")
+        for tag_name in ['h1', 'h2', 'form']:
+            elements = soup.find_all(tag_name)
+            if elements:
+                print(f"  - {tag_name}: {len(elements)} elementos")
+                for i, elem in enumerate(elements[:3]):
+                    print(f"    {i+1}. {elem.get_text().strip()[:50]}")
+                if len(elements) > 3:
+                    print(f"    ... y {len(elements) - 3} más")
+        
+        # Mostrar posibles mensajes de error o redirección
+        error_indicators = [
+            "error", "no encontrado", "not found", "404", "403", 
+            "mantenimiento", "maintenance", "redirect", "redirection"
+        ]
+        
+        for indicator in error_indicators:
+            if indicator in html.lower():
+                print(f"⚠️ Posible problema detectado: '{indicator}'")
     
     def run(self, page_limit=None, start_page=1, debug_mode=False):
         """Ejecutar el scraper completo
@@ -849,38 +1054,52 @@ class UncategorizedScraper:
             print("\n" + "="*50)
             print("📊 ESTADÍSTICAS FINALES")
             print("="*50)
-            print(f"Total de productos procesados: {self.stats['total_products']}")
-            print(f"Productos nuevos: {self.stats['new_products']}")
-            print(f"Productos ya existentes: {self.stats['existing_products']}")
-            print(f"Productos sin categoría: {self.stats['uncategorized_products']}")
-            print(f"Errores: {self.stats['errors']}")
-            print(f"Tiempo total de ejecución: {int(hours)}h {int(minutes)}m {int(seconds)}s")
+            print(f"✅ Total de productos procesados: {self.stats['total_products']}")
+            print(f"📋 Productos sin categoría: {self.stats['uncategorized_products']}")
+            print(f"🆕 Productos nuevos: {self.stats['new_products']}")
+            print(f"🔄 Productos existentes (ignorados): {self.stats['existing_products']}")
+            print(f"🖼️ Imágenes guardadas: {self.stats['images_saved']}")
+            print(f"❌ Errores de imágenes: {self.stats['image_errors']}")
+            print(f"⚠️ Errores generales: {self.stats['errors']}")
+            print(f"⏱️ Duración total: {int(hours)}h {int(minutes)}m {int(seconds)}s")
+            print("="*50)
+            
+        except KeyboardInterrupt:
+            print("\n\n⛔ Ejecución interrumpida por el usuario")
+            
+            # Duración hasta interrupción
+            duration = time.time() - start_time
+            hours, remainder = divmod(duration, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            
+            # Mostrar estadísticas parciales
+            print("\n" + "="*50)
+            print("📊 ESTADÍSTICAS PARCIALES")
+            print("="*50)
+            print(f"✅ Productos procesados: {self.stats['total_products']}")
+            print(f"📋 Productos sin categoría: {self.stats['uncategorized_products']}")
+            print(f"🆕 Productos nuevos: {self.stats['new_products']}")
+            print(f"🔄 Productos existentes: {self.stats['existing_products']}")
+            print(f"🖼️ Imágenes guardadas: {self.stats['images_saved']}")
+            print(f"❌ Errores de imágenes: {self.stats['image_errors']}")
+            print(f"⚠️ Errores: {self.stats['errors']}")
+            print(f"⏱️ Duración: {int(hours)}h {int(minutes)}m {int(seconds)}s")
             print("="*50)
             
         except Exception as e:
-            print(f"❌ Error general en el scraper: {str(e)}")
+            print(f"\n❌ Error durante la ejecución: {str(e)}")
             import traceback
             traceback.print_exc()
-    
-    def close(self):
-        """Cerrar la sesión y liberar recursos"""
-        if hasattr(self, 'session'):
-            self.session.close()
 
-def main():
-    """Función principal"""
-    parser = argparse.ArgumentParser(description="Scrapear productos sin categoría de OfertasB")
-    parser.add_argument("--limit", type=int, help="Límite de páginas a procesar (para pruebas)")
-    parser.add_argument("--start", type=int, default=1, help="Página desde la que comenzar")
-    parser.add_argument("--debug", action="store_true", help="Activar modo de depuración")
-    args = parser.parse_args()
-    
-    scraper = UncategorizedScraper()
-    
-    try:
-        scraper.run(page_limit=args.limit, start_page=args.start, debug_mode=args.debug)
-    finally:
-        scraper.close()
 
 if __name__ == "__main__":
-    main()
+    # Configurar argumentos de línea de comandos
+    parser = argparse.ArgumentParser(description='Scraper de productos sin categoría de OfertasB')
+    parser.add_argument('-l', '--limit', type=int, help='Limitar a un número específico de páginas')
+    parser.add_argument('-s', '--start', type=int, default=1, help='Página desde la que comenzar')
+    parser.add_argument('-d', '--debug', action='store_true', help='Modo debug con información adicional')
+    args = parser.parse_args()
+    
+    # Crear e iniciar el scraper
+    scraper = UncategorizedScraper()
+    scraper.run(page_limit=args.limit, start_page=args.start, debug_mode=args.debug)
