@@ -1,16 +1,24 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, createContext } from 'react'
 import { motion } from 'framer-motion'
 import { Search, ShoppingBag, Sparkles, ShoppingCart } from 'lucide-react'
 
 import { getCategories, getProducts } from '@/lib/database'
 import CategorySidebar from '@/components/CategorySidebar'
 import ProductGrid from '@/components/ProductGrid'
+import ProductPagination from '@/components/ProductPagination'
 import SearchBar from '@/components/SearchBar'
 import CartDrawer from '@/components/CartDrawer'
+import ImageViewer from '@/components/ImageViewer'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+
+// Contexto para el visor de imágenes
+export const ImageViewerContext = createContext({
+  openImageViewer: () => {},
+  imageViewerState: { isOpen: false, imageUrl: '', alt: '' }
+});
 
 export default function HomePage() {
   const [categories, setCategories] = useState([])
@@ -23,23 +31,56 @@ export default function HomePage() {
   // Cart state
   const [cartItems, setCartItems] = useState([])
   const [isCartOpen, setIsCartOpen] = useState(false)
+  
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalProducts, setTotalProducts] = useState(0)
+  const [totalPages, setTotalPages] = useState(1)
+  const productsPerPage = 12
+  
+  // ImageViewer state
+  const [imageViewerState, setImageViewerState] = useState({
+    isOpen: false,
+    imageUrl: '',
+    alt: ''
+  })
+  
+  // Función para abrir el visor de imágenes
+  const openImageViewer = (imageUrl, alt) => {
+    setImageViewerState({
+      isOpen: true,
+      imageUrl,
+      alt
+    })
+  }
+  
+  // Función para cerrar el visor de imágenes
+  const closeImageViewer = () => {
+    setImageViewerState({
+      ...imageViewerState,
+      isOpen: false
+    })
+  }
+  
+  // Valor del contexto para el visor de imágenes
+  const imageViewerContextValue = {
+    openImageViewer,
+    imageViewerState
+  }
 
   // Load initial data
   useEffect(() => {
     async function loadInitialData() {
       setLoading(true)
       try {
-        console.log('Loading initial data...')
         const [categoriesData, productsData] = await Promise.all([
           getCategories(),
-          getProducts({ limit: 24 })
+          getProducts({ limit: productsPerPage, page: 1 })
         ])
-        
-        console.log('Categories loaded:', categoriesData.length)
-        console.log('Products loaded:', productsData.products.length)
         
         setCategories(categoriesData)
         setProducts(productsData.products)
+        setTotalProducts(productsData.totalCount)
       } catch (error) {
         console.error('Error loading initial data:', error)
       } finally {
@@ -50,7 +91,7 @@ export default function HomePage() {
     loadInitialData()
   }, [])
 
-  // Load products when category or search changes
+  // Load products when category, search, page, or productsPerPage changes
   useEffect(() => {
     async function loadProducts() {
       setProductsLoading(true)
@@ -58,12 +99,25 @@ export default function HomePage() {
         const result = await getProducts({
           categoryId: selectedCategory?.id,
           searchTerm: searchTerm.trim(),
-          limit: 50
+          limit: productsPerPage,
+          page: currentPage
         })
+        
         setProducts(result.products)
+        setTotalProducts(result.totalCount)
+        
+        const pages = Math.max(1, Math.ceil(result.totalCount / productsPerPage))
+        setTotalPages(pages)
+        
+        // Si la página actual es mayor que el total de páginas, volver a la primera
+        if (currentPage > pages) {
+          setCurrentPage(1)
+        }
       } catch (error) {
         console.error('Error loading products:', error)
         setProducts([])
+        setTotalProducts(0)
+        setTotalPages(1)
       } finally {
         setProductsLoading(false)
       }
@@ -72,17 +126,26 @@ export default function HomePage() {
     if (!loading) {
       loadProducts()
     }
-  }, [selectedCategory, searchTerm, loading])
+  }, [selectedCategory, searchTerm, currentPage, loading, productsPerPage])
 
   const handleCategorySelect = (category) => {
     setSelectedCategory(category)
     setSearchTerm('')
+    setCurrentPage(1) // Reset to first page on category change
   }
 
   const handleSearch = (term) => {
     setSearchTerm(term)
+    setCurrentPage(1) // Reset to first page on search
     if (term.trim()) {
       setSelectedCategory(null)
+    }
+  }
+  
+  const handlePageChange = (newPage) => {
+    if (newPage >= 1 && newPage <= totalPages && newPage !== currentPage) {
+      setCurrentPage(newPage);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   }
 
@@ -127,8 +190,8 @@ export default function HomePage() {
   }
 
   const filteredProductsCount = useMemo(() => {
-    return products.length
-  }, [products])
+    return totalProducts
+  }, [totalProducts])
 
   const headerTitle = useMemo(() => {
     if (searchTerm) {
@@ -161,10 +224,19 @@ export default function HomePage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Hero Header */}
-      <motion.header 
-        className="border-b border-border/50 bg-card/20 backdrop-blur-sm sticky top-0 z-40"
+    <ImageViewerContext.Provider value={imageViewerContextValue}>
+      <div className="min-h-screen bg-background">
+        {/* Visor de imágenes a nivel global */}
+        <ImageViewer 
+          isOpen={imageViewerState.isOpen}
+          onClose={closeImageViewer}
+          imageUrl={imageViewerState.imageUrl}
+          alt={imageViewerState.alt}
+        />
+        
+        {/* Hero Header */}
+        <motion.header 
+          className="border-b border-border/50 bg-card/20 backdrop-blur-sm sticky top-0 z-40"
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6 }}
@@ -182,7 +254,7 @@ export default function HomePage() {
                     Catálogo Premium
                   </h1>
                   <p className="text-sm text-muted-foreground">
-                    Los mejores productos al mejor precio
+                    Los mejores precios
                   </p>
                 </div>
               </div>
@@ -193,11 +265,8 @@ export default function HomePage() {
                 onSearch={handleSearch}
                 searchTerm={searchTerm}
                 placeholder="Buscar productos..."
+                className="w-full max-w-md"
               />
-              
-              <Badge variant="secondary" className="hidden sm:flex">
-                {categories.reduce((sum, cat) => sum + (cat.product_count || 0), 0)} productos
-              </Badge>
 
               {/* Cart Button */}
               <Button
@@ -250,22 +319,29 @@ export default function HomePage() {
                   {headerTitle}
                 </h2>
                 <p className="text-sm text-muted-foreground mt-1">
-                  {filteredProductsCount} {filteredProductsCount === 1 ? 'producto encontrado' : 'productos encontrados'}
+                  {totalProducts > 0 && (
+                    <>
+                      {totalProducts} {totalProducts === 1 ? 'producto encontrado' : 'productos encontrados'}
+                    </>
+                  )}
                 </p>
               </div>
 
-              {(selectedCategory || searchTerm) && (
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setSelectedCategory(null)
-                    setSearchTerm('')
-                  }}
-                  className="shrink-0"
-                >
-                  Limpiar filtros
-                </Button>
-              )}
+              <div className="flex items-center gap-4">
+                {(selectedCategory || searchTerm) && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setSelectedCategory(null)
+                      setSearchTerm('')
+                      setCurrentPage(1)
+                    }}
+                    className="shrink-0"
+                  >
+                    Limpiar filtros
+                  </Button>
+                )}
+              </div>
             </div>
 
             {/* Products Grid */}
@@ -276,6 +352,18 @@ export default function HomePage() {
               categoryName={selectedCategory?.name}
               onAddToCart={handleAddToCart}
             />
+            
+            {/* Products Pagination - Bottom Center */}
+            {totalProducts > productsPerPage && (
+              <div className="flex justify-center mt-8 mb-6">
+                <ProductPagination 
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  onPageChange={handlePageChange}
+                  className="pagination-controls"
+                />
+              </div>
+            )}
           </motion.div>
         </div>
       </main>
@@ -289,5 +377,6 @@ export default function HomePage() {
         onRemoveItem={handleRemoveItem}
       />
     </div>
+    </ImageViewerContext.Provider>
   )
 }

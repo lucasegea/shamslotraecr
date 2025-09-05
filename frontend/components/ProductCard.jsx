@@ -1,19 +1,21 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useContext } from 'react'
 import Image from 'next/image'
 import { motion } from 'framer-motion'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Dialog, DialogContent, DialogTrigger } from '@/components/ui/dialog'
 import { ShoppingCart, ExternalLink, ImageIcon, Maximize2 } from 'lucide-react'
 import { formatPrice } from '@/lib/types'
+import { ImageViewerContext } from '@/app/page'
 
 export default function ProductCard({ product, onAddToCart }) {
   const [imageError, setImageError] = useState(false)
   const [imageLoading, setImageLoading] = useState(true)
-  const [dialogOpen, setDialogOpen] = useState(false)
+  
+  // Usar el contexto del visor de imágenes global
+  const { openImageViewer } = useContext(ImageViewerContext)
   
   // Try multiple image sources with priority on Supabase storage bucket
   const getImageUrl = () => {
@@ -70,63 +72,34 @@ export default function ProductCard({ product, onAddToCart }) {
         <CardContent className="p-4 flex flex-col h-full">
           <div className="flex flex-col gap-4 h-full">
             {/* Imagen más grande en la parte superior */}
-            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-              <DialogTrigger asChild>
-                <button 
-                  type="button" 
-                  className="relative aspect-square w-full overflow-hidden rounded-lg bg-gray-100 flex items-center justify-center border border-gray-200 group cursor-pointer"
-                >
-                  {imageUrl && !imageError ? (
-                    <div className="relative w-full h-full">
-                      {imageLoading && (
-                        <div className="absolute inset-0 bg-gray-200 animate-pulse rounded-lg" />
-                      )}
-                      <Image
-                        src={imageUrl}
-                        alt={product.name}
-                        fill
-                        className="object-cover transition-transform duration-300 group-hover:scale-105"
-                        sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-                        onError={handleImageError}
-                        onLoad={handleImageLoad}
-                        priority={false}
-                      />
-                      <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/20 transition-opacity">
-                        <Maximize2 className="h-8 w-8 text-white drop-shadow-md" />
-                      </div>
-                    </div>
-                  ) : (
-                    <ImageIcon className="h-12 w-12 text-gray-400" />
+            <button 
+              type="button" 
+              onClick={() => imageUrl && openImageViewer(imageUrl, product.name)}
+              className="relative aspect-square w-full overflow-hidden rounded-lg bg-gray-100 flex items-center justify-center border border-gray-200 group cursor-pointer"
+            >
+              {imageUrl && !imageError ? (
+                <div className="relative w-full h-full">
+                  {imageLoading && (
+                    <div className="absolute inset-0 bg-gray-200 animate-pulse rounded-lg" />
                   )}
-                </button>
-              </DialogTrigger>
-              <DialogContent className="max-w-4xl w-[95vw] md:w-auto p-1 sm:p-2 md:p-4">
-                {imageUrl && !imageError ? (
-                  <div className="relative w-full max-h-[80vh] aspect-auto">
-                    <div className="relative w-full h-[60vh] md:h-[70vh]">
-                      <Image
-                        src={imageUrl}
-                        alt={product.name}
-                        fill
-                        className="object-contain rounded-lg"
-                        sizes="(max-width: 1280px) 100vw, 1280px"
-                        priority={true}
-                        onError={handleImageError}
-                      />
-                    </div>
-                    <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-white p-2 rounded-b text-center text-sm truncate">
-                      {product.name}
-                    </div>
+                  <Image
+                    src={imageUrl}
+                    alt={product.name}
+                    fill
+                    className="object-cover transition-transform duration-300 group-hover:scale-105"
+                    sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                    onError={handleImageError}
+                    onLoad={handleImageLoad}
+                    priority={false}
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/20 transition-opacity">
+                    <Maximize2 className="h-8 w-8 text-white drop-shadow-md" />
                   </div>
-                ) : (
-                  <div className="flex flex-col items-center justify-center p-8 text-center">
-                    <ImageIcon className="h-20 w-20 text-gray-400 mb-4" />
-                    <p className="text-gray-500">No se pudo cargar la imagen del producto</p>
-                    <p className="text-sm text-gray-400 mt-2">{product.name}</p>
-                  </div>
-                )}
-              </DialogContent>
-            </Dialog>
+                </div>
+              ) : (
+                <ImageIcon className="h-12 w-12 text-gray-400" />
+              )}
+            </button>
             
             {/* Contenido del producto */}
             <div className="flex-1 space-y-3">

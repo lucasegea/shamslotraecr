@@ -17,10 +17,30 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
   }, 0)
 
   const formatTotalPrice = (total) => {
-    return new Intl.NumberFormat('es-CR', { 
-      style: 'currency', 
-      currency: 'CRC' 
-    }).format(total)
+    // Función personalizada para asegurar que los números de cuatro dígitos también tengan separador
+    const formatWithThousandsSeparator = (num) => {
+      // Convertir a string y eliminar cualquier parte decimal
+      const integerPart = Math.floor(num).toString();
+      
+      // Formatear con puntos como separadores de miles
+      if (integerPart.length <= 3) {
+        // No necesita separador
+        return integerPart;
+      } else {
+        // Agregar separadores cada tres dígitos desde el final
+        let result = '';
+        for (let i = 0; i < integerPart.length; i++) {
+          if (i > 0 && (integerPart.length - i) % 3 === 0) {
+            result += '.';
+          }
+          result += integerPart[i];
+        }
+        return result;
+      }
+    };
+    
+    // Usar el símbolo de colón (₡) y nuestra función personalizada
+    return `₡${formatWithThousandsSeparator(total)}`;
   }
 
   return (

@@ -33,10 +33,30 @@ export const ProductType = {
 // Utility function to format Costa Rican prices
 export const formatPrice = (priceNumeric, priceRaw, currency = 'CRC') => {
   if (priceNumeric !== null && priceNumeric !== undefined) {
-    return new Intl.NumberFormat('es-CR', { 
-      style: 'currency', 
-      currency: currency || 'CRC' 
-    }).format(priceNumeric)
+    // Función personalizada para asegurar que los números de cuatro dígitos también tengan separador
+    const formatWithThousandsSeparator = (num) => {
+      // Convertir a string y eliminar cualquier parte decimal
+      const integerPart = Math.floor(num).toString();
+      
+      // Formatear con puntos como separadores de miles
+      if (integerPart.length <= 3) {
+        // No necesita separador
+        return integerPart;
+      } else {
+        // Agregar separadores cada tres dígitos desde el final
+        let result = '';
+        for (let i = 0; i < integerPart.length; i++) {
+          if (i > 0 && (integerPart.length - i) % 3 === 0) {
+            result += '.';
+          }
+          result += integerPart[i];
+        }
+        return result;
+      }
+    };
+    
+    // Usar el símbolo de colón (₡) y nuestra función personalizada
+    return `₡${formatWithThousandsSeparator(priceNumeric)}`;
   }
   return priceRaw || 'Precio no disponible'
 }

@@ -62,6 +62,7 @@ export async function getProducts(options = {}) {
       limit = 24 
     } = options
 
+    // Base query for fetching records with count
     let query = supabase
       .from('products')
       .select(`
@@ -78,7 +79,7 @@ export async function getProducts(options = {}) {
         first_seen_at,
         last_seen_at,
         seller_id
-      `)
+      `, { count: 'exact' })
       .eq('seller_id', 1)
 
     // Category filter
@@ -103,10 +104,13 @@ export async function getProducts(options = {}) {
     // Pagination
     const from = (page - 1) * limit
     const to = from + limit - 1
+    
+    // Apply pagination to query
     query = query.range(from, to)
-
+    
+    // Execute query
     const { data, error, count } = await query
-
+    
     if (error) {
       console.error('Error fetching products:', error)
       return { products: [], totalCount: 0 }
