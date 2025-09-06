@@ -10,9 +10,11 @@ export default function ImageViewer({ isOpen, onClose, imageUrl, alt }) {
   
   useEffect(() => {
     setIsMounted(true)
-    
+  }, [])
+  
+  useEffect(() => {
     // Prevenir el scroll cuando el modal está abierto
-    if (isOpen) {
+    if (isOpen && isMounted) {
       document.body.style.overflow = 'hidden'
       
       // Manejar la tecla escape
@@ -26,7 +28,7 @@ export default function ImageViewer({ isOpen, onClose, imageUrl, alt }) {
         window.removeEventListener('keydown', handleEscape)
       }
     }
-  }, [isOpen, onClose])
+  }, [isOpen, onClose, isMounted])
 
   // No renderizar nada del lado del servidor
   if (!isMounted) return null
@@ -36,18 +38,26 @@ export default function ImageViewer({ isOpen, onClose, imageUrl, alt }) {
 
   return (
     <div 
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80"
+      className="fixed inset-0 z-[99999] flex items-center justify-center bg-black bg-opacity-80"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 99999
+      }}
     >
       <div 
-        className="relative bg-white max-w-5xl w-[95vw] mx-auto rounded-lg overflow-hidden"
+        className="relative bg-white max-w-4xl w-[90vw] max-h-[90vh] mx-auto rounded-lg overflow-hidden shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <button 
           onClick={onClose}
-          className="absolute right-2 top-2 z-50 rounded-full bg-white/90 p-1 text-gray-600 shadow-md hover:text-gray-900"
+          className="absolute right-4 top-4 z-[100000] rounded-full bg-white bg-opacity-90 p-2 text-gray-600 shadow-lg hover:text-gray-900 hover:bg-opacity-100 transition-all"
           aria-label="Cerrar"
         >
           <X className="h-6 w-6" />
@@ -55,26 +65,28 @@ export default function ImageViewer({ isOpen, onClose, imageUrl, alt }) {
         
         {imageUrl ? (
           <div className="relative w-full">
-            <div className="relative w-full h-[60vh] md:h-[70vh]">
+            <div className="relative w-full h-[70vh]">
               <Image
                 src={imageUrl}
                 alt={alt || "Imagen del producto"}
                 fill
                 className="object-contain"
-                sizes="(max-width: 1280px) 100vw, 1280px"
+                sizes="90vw"
                 priority={true}
+                onError={() => console.log('Error loading image in viewer:', imageUrl)}
+                onLoad={() => console.log('Image loaded successfully in viewer:', imageUrl)}
               />
             </div>
             {alt && (
-              <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-white p-2 text-center text-sm truncate">
+              <div className="bg-gray-100 px-4 py-3 text-center text-sm text-gray-700">
                 {alt}
               </div>
             )}
           </div>
         ) : (
-          <div className="flex flex-col items-center justify-center p-8 text-center">
+          <div className="flex flex-col items-center justify-center p-12 text-center">
             <ImageIcon className="h-20 w-20 text-gray-400 mb-4" />
-            <p className="text-gray-500">No se pudo cargar la imagen</p>
+            <p className="text-gray-500 text-lg">No se pudo cargar la imagen</p>
           </div>
         )}
       </div>
