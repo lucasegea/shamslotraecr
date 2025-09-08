@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Image from 'next/image'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, ShoppingCart, Plus, Minus, Trash2, ExternalLink, ImageIcon } from 'lucide-react'
+import { X, ShoppingCart, Plus, Minus, Trash2, ImageIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
@@ -174,16 +174,6 @@ function CartItem({ item, onUpdateQuantity, onRemoveItem }) {
             
             <div className="flex items-center justify-between">
               <span className="text-blue-600 font-semibold">{formattedPrice}</span>
-              {product.product_url && (
-                <a 
-                  href={product.product_url} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="text-gray-400 hover:text-blue-600"
-                >
-                  <ExternalLink className="h-4 w-4" />
-                </a>
-              )}
             </div>
 
             {/* Controles de cantidad */}

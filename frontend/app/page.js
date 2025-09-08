@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, createContext } from 'react'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { Search, ShoppingBag, Sparkles, ShoppingCart } from 'lucide-react'
 
 import { getCategories, getProducts } from '@/lib/database'
@@ -31,6 +31,7 @@ export default function HomePage() {
   // Cart state
   const [cartItems, setCartItems] = useState([])
   const [isCartOpen, setIsCartOpen] = useState(false)
+  const [isCartBouncing, setIsCartBouncing] = useState(false)
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1)
@@ -167,9 +168,9 @@ export default function HomePage() {
       }
     })
     
-    // Show cart briefly
-    setIsCartOpen(true)
-    setTimeout(() => setIsCartOpen(false), 2000)
+    // Animate cart icon
+    setIsCartBouncing(true)
+    setTimeout(() => setIsCartBouncing(false), 800)
   }
 
   const handleUpdateQuantity = (productId, newQuantity) => {
@@ -276,15 +277,38 @@ export default function HomePage() {
                 className="relative"
                 onClick={() => setIsCartOpen(true)}
               >
-                <ShoppingCart className="h-5 w-5" />
-                {totalCartItems > 0 && (
-                  <Badge 
-                    variant="destructive" 
-                    className="absolute -top-2 -right-2 h-6 w-6 rounded-full p-0 flex items-center justify-center text-xs"
+                <AnimatePresence mode="wait">
+                  <motion.div
+                    key={totalCartItems} // Esto fuerza la reanimación cuando cambia el total
+                    initial={isCartBouncing ? { scale: 0.5, rotate: -15 } : { scale: 1, rotate: 0 }}
+                    animate={isCartBouncing ? {
+                      scale: [0.5, 1.2, 1],
+                      rotate: [-15, 15, 0],
+                    } : { scale: 1, rotate: 0 }}
+                    transition={{ 
+                      duration: 0.4,
+                      ease: "easeOut",
+                    }}
                   >
-                    {totalCartItems}
-                  </Badge>
-                )}
+                    <ShoppingCart className="h-5 w-5" />
+                  </motion.div>
+                </AnimatePresence>
+                <AnimatePresence>
+                  {totalCartItems > 0 && (
+                    <motion.div
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      exit={{ scale: 0 }}
+                    >
+                      <Badge 
+                        variant="destructive" 
+                        className="absolute -top-2 -right-2 h-6 w-6 rounded-full p-0 flex items-center justify-center text-xs"
+                      >
+                        {totalCartItems}
+                      </Badge>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </Button>
             </div>
           </div>
