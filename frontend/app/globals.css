@@ -3,8 +3,9 @@
 @tailwind utilities;
 
 body {
-  background-color: white;
+  background-color: #f3f4f6; /* tailwind gray-100 */
   color: #1f2937;
+  overflow-x: hidden;
 }
 
 .glass-card {

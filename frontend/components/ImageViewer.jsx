@@ -73,8 +73,8 @@ export default function ImageViewer({ isOpen, onClose, imageUrl, alt }) {
                 className="object-contain"
                 sizes="90vw"
                 priority={true}
-                onError={() => console.log('Error loading image in viewer:', imageUrl)}
-                onLoad={() => console.log('Image loaded successfully in viewer:', imageUrl)}
+                onError={() => {}}
+                onLoad={() => {}}
               />
             </div>
             {alt && (

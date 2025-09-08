@@ -40,17 +40,17 @@ export default function SearchBar({ onSearch, searchTerm, placeholder = "Buscar 
 
   return (
     <motion.div 
-      className="relative max-w-md w-full"
+  className="relative max-w-md w-full"
       initial={{ opacity: 0, y: -20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
       onClick={focusSearchField}
     >
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
         
         {/* Volver a un input nativo pero con un envoltorio para personalizar eventos */}
-        <textarea
+  <textarea
           ref={inputRef}
           value={localSearchTerm}
           onChange={(e) => {
@@ -64,7 +64,7 @@ export default function SearchBar({ onSearch, searchTerm, placeholder = "Buscar 
           }}
           placeholder={placeholder}
           className={cn(
-            "flex h-10 w-full rounded-xl border border-input bg-background pl-10 pr-12 py-2 text-sm resize-none",
+            "flex h-9 sm:h-10 w-full rounded-lg sm:rounded-xl border border-input bg-background pl-10 pr-12 py-2 text-sm resize-none",
             "bg-card/50 border-border/50 focus:border-primary/50 transition-all duration-200",
             "placeholder:text-muted-foreground/70 focus:outline-none focus:ring-2 focus:ring-primary/30",
             "[&::selection]:bg-sky-300 [&::selection]:text-sky-900" // Selección celeste con texto en azul oscuro

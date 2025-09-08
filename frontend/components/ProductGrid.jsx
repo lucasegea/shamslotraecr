@@ -76,7 +76,7 @@ export default function ProductGrid({
 }) {
   if (loading) {
     return (
-      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 auto-rows-fr">
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-4 auto-rows-fr">
         {Array.from({ length: 8 }).map((_, i) => (
           <ProductSkeleton key={i} />
         ))}
@@ -97,10 +97,10 @@ export default function ProductGrid({
       variants={container}
       initial="hidden"
       animate="show"
-      className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 auto-rows-fr"
+      className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-4 auto-rows-fr"
     >
       {products.map((product) => (
-        <motion.div key={product.id} variants={item}>
+        <motion.div key={product.id} variants={item} className="col-span-1">
           <ProductCard product={product} onAddToCart={onAddToCart} />
         </motion.div>
       ))}

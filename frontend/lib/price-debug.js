@@ -7,16 +7,8 @@ import { formatPrice } from './types';
 /**
  * Log detallado para depuración de datos de precio de un producto
  */
-export function logProductPriceData(product, prefix = '') {
-  if (!product) {
-    console.log(`${prefix} No hay producto para mostrar precios`);
-    return;
-  }
-  
-  console.log(`${prefix} Datos de precio para producto ID: ${product.id}`);
-  console.log(`${prefix} - Nombre: ${product.name}`);
-  console.log(`${prefix} - final_price: ${product.final_price} (${typeof product.final_price})`);
-  console.log(`${prefix} - price_raw: ${product.price_raw} (${typeof product.price_raw})`);
+export function logProductPriceData(_product, _prefix = '') {
+  // No-op en producción: se mantiene la firma para evitar romper imports
 }
 
 /**
@@ -31,7 +23,6 @@ export function getPriceToDisplay(valueOrProduct) {
 
   // 1) Número directo
   if (typeof val === 'number' && isFinite(val)) {
-    console.log('💰 getPriceToDisplay → usando final_price (number):', val)
     return val;
   }
 
@@ -40,7 +31,6 @@ export function getPriceToDisplay(valueOrProduct) {
     const cleaned = val.replace(/[^\d.-]/g, '');
     const num = Number(cleaned);
     if (!isNaN(num) && isFinite(num)) {
-      console.log('💰 getPriceToDisplay → usando final_price (string→number):', val, '→', num)
       return num;
     }
   }
@@ -52,14 +42,12 @@ export function getPriceToDisplay(valueOrProduct) {
       const cleaned = raw.replace(/[^\d.-]/g, '');
       const num = Number(cleaned);
       if (!isNaN(num) && isFinite(num)) {
-        console.log('💰 getPriceToDisplay → usando price_raw (string→number):', raw, '→', num)
         return num;
       }
     }
   }
 
   // 4) Fallback definitivo
-  console.warn('⚠️ getPriceToDisplay → no se pudo obtener precio válido. Usando 0. Entrada:', valueOrProduct)
   return 0;
 }
 

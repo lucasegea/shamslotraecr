@@ -136,14 +136,8 @@ function CartItem({ item, onUpdateQuantity, onRemoveItem }) {
   }
 
   const imageUrl = getImageUrl()
-  // Usar las utilidades de diagnóstico para registrar datos de precios
+  // No-op logs removed for producción
   logProductPriceData(product, 'CartItem');
-  
-  console.log('🛒 CARTITEM - Datos de precio:', {
-    name: product.name,
-    final_price: product.final_price,
-    final_price_type: typeof product.final_price
-  });
   
   // Precio unitario y total basados en final_price (robusto)
   const finalPriceNum = getPriceToDisplay(product);

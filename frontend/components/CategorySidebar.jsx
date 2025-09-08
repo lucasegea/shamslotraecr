@@ -7,12 +7,14 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { Package, Filter } from 'lucide-react'
 
-export default function CategorySidebar({ categories, selectedCategory, onCategorySelect }) {
+export default function CategorySidebar({ categories, selectedCategory, onCategorySelect, isMobile = false }) {
   const totalProducts = categories.reduce((sum, cat) => sum + (cat.product_count || 0), 0)
 
   return (
-    <div className="w-80 sticky top-4 h-fit">
-      <Card className="glass-card bg-white shadow-sm">
+    <div className={isMobile ? "w-full h-fit" : "w-80 sticky top-4 h-fit"}>
+      <Card className={cn(
+        isMobile ? "bg-transparent border-0 shadow-none" : "glass-card bg-white shadow-sm"
+      )}>
         <CardHeader className="pb-4">
           <CardTitle className="flex items-center gap-2 text-gray-900">
             <Filter className="h-5 w-5 text-blue-600" />
@@ -55,7 +57,8 @@ export default function CategorySidebar({ categories, selectedCategory, onCatego
           </motion.div>
 
           {/* Category List */}
-          <div className="space-y-1 max-h-96 overflow-y-auto">
+      <div className={cn("space-y-1", isMobile ? "max-h-[50vh]" : "max-h-96", "overflow-y-auto")}
+      >
             {categories.map((category) => (
               <motion.div 
                 key={`${category.id}-${category.name}`}

@@ -10,12 +10,19 @@ module.exports = {
     prefix: "",
     theme: {
     	container: {
-    		center: true,
-    		padding: '2rem',
-    		screens: {
-    			'2xl': '1400px'
-    		}
-    	},
+			center: true,
+			padding: {
+				DEFAULT: '0.5rem',
+				sm: '1.25rem',
+				md: '1.5rem',
+				lg: '2rem',
+				xl: '2rem',
+				'2xl': '2rem'
+			},
+			screens: {
+				'2xl': '1400px'
+			}
+		},
     	extend: {
     		colors: {
     			border: 'hsl(var(--border))',

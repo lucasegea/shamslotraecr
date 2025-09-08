@@ -115,16 +115,7 @@ export async function getProducts(options = {}) {
       return { products: [], totalCount: 0 }
     }
 
-    // Log some debugging info
-    if (data && data.length > 0) {
-      console.log('🔍 Datos de los primeros productos:', data.slice(0, 2).map(p => ({
-        id: p.id,
-        name: p.name,
-        final_price: p.final_price,
-        final_price_type: typeof p.final_price,
-        price_raw: p.price_raw
-      })));
-    }
+  // Debug logs removidos para producción
 
     return { 
       products: data || [], 

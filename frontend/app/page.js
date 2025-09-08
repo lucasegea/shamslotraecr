@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, createContext } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Search, ShoppingBag, Sparkles, ShoppingCart } from 'lucide-react'
+import { Search, Waves, ShoppingCart } from 'lucide-react'
 
 import { getCategories, getProducts } from '@/lib/database'
 import { supabase } from '@/lib/supabase'
@@ -105,22 +105,7 @@ export default function HomePage() {
           page: currentPage
         })
         
-        // Debug detallado: verificar los datos de productos antes de establecerlos
-        console.log('🔄 Productos recibidos en page.js:', result.products.slice(0, 3).map(p => ({
-          id: p.id,
-          name: p.name,
-          final_price: p.final_price,
-          final_price_type: typeof p.final_price,
-          final_price_numeric: Number(p.final_price),
-          price_raw: p.price_raw
-        })));
-        
-        // No modificamos los productos, simplemente mostramos información
-        console.log('👀 Productos en page.js antes de establecerlos:', result.products.slice(0, 2).map(p => ({
-          name: p.name,
-          final_price: p.final_price,
-          final_price_type: typeof p.final_price
-        })));
+  // Logs de depuración removidos para producción
         
         // Usar los productos directamente sin modificar
         setProducts(result.products)
@@ -198,21 +183,7 @@ export default function HomePage() {
       // Usar el producto actualizado si está disponible, de lo contrario usar el original
       const updatedProduct = data || product;
       
-      // Log detallado para depuración, enfocado en final_price
-      console.log('🛒 AGREGANDO AL CARRITO:', {
-        original: {
-          id: product.id,
-          name: product.name,
-          final_price: product.final_price,
-          final_price_type: typeof product.final_price
-        },
-        updated: {
-          id: updatedProduct.id,
-          name: updatedProduct.name,
-          final_price: updatedProduct.final_price,
-          final_price_type: typeof updatedProduct.final_price
-        }
-      });
+  // Logs removidos
       
       setCartItems(prevItems => {
         const existingItem = prevItems.find(item => item.product.id === updatedProduct.id);
@@ -319,22 +290,21 @@ export default function HomePage() {
         
         {/* Hero Header */}
         <motion.header 
-          className="border-b border-border/50 bg-card/20 backdrop-blur-sm sticky top-0 z-40"
+          className="sticky top-0 z-40 bg-transparent"
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6 }}
       >
-        <div className="container mx-auto px-4 py-6">
+  <div className="mx-auto w-full max-w-screen-xl px-0 sm:px-4 py-4 sm:py-6">
           <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-3">
                 <div className="relative">
-                  <ShoppingBag className="h-8 w-8 text-primary" />
-                  <Sparkles className="h-4 w-4 text-secondary absolute -top-1 -right-1" />
+                  <Waves className="h-8 w-8 text-blue-900" />
                 </div>
                 <div>
-                  <h1 className="text-2xl lg:text-3xl font-bold text-foreground">
-                    Catálogo Premium
+                  <h1 className="text-xl md:text-2xl lg:text-3xl font-bold text-blue-900">
+                    Shams lo trae!
                   </h1>
                   <p className="text-sm text-muted-foreground">
                     Los mejores precios
@@ -396,10 +366,11 @@ export default function HomePage() {
       </motion.header>
 
       {/* Main Content */}
-      <main className="container mx-auto px-4 py-8">
-        <div className="flex gap-8">
-          {/* Sidebar */}
+  <main className="mx-auto w-full max-w-screen-xl px-0 sm:px-4 py-5 sm:py-8">
+        <div className="flex flex-col lg:flex-row gap-5 lg:gap-8">
+          {/* Sidebar - desktop only */}
           <motion.aside
+            className="hidden lg:block"
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.6, delay: 0.2 }}
@@ -418,10 +389,27 @@ export default function HomePage() {
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.6, delay: 0.3 }}
           >
+            {/* Mobile filters */}
+            <div className="lg:hidden">
+              <details className="group rounded-xl border border-transparent bg-transparent p-0">
+                <summary className="list-none cursor-pointer select-none flex items-center justify-between">
+                  <span className="font-medium">Categorías</span>
+                  <span className="text-sm text-muted-foreground">toca para abrir</span>
+                </summary>
+                <div className="pt-2">
+                  <CategorySidebar
+                    categories={categories}
+                    selectedCategory={selectedCategory}
+                    onCategorySelect={handleCategorySelect}
+                    isMobile={true}
+                  />
+                </div>
+              </details>
+            </div>
             {/* Products Header */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div>
-                <h2 className="text-xl font-semibold text-foreground">
+                <h2 className="text-base sm:text-lg font-semibold text-foreground">
                   {headerTitle}
                 </h2>
                 <p className="text-sm text-muted-foreground mt-1">

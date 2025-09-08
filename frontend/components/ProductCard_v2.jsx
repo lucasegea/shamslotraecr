@@ -13,7 +13,6 @@ import { supabase } from '@/lib/supabase'
 import { ImageViewerContext } from '@/app/page'
 
 export default function ProductCard({ product, onAddToCart }) {
-  console.log('🧩 ProductCard v2 render START → id:', product?.id, 'name:', product?.name)
   const [imageError, setImageError] = useState(false)
   const [imageLoading, setImageLoading] = useState(true)
   const [quantity, setQuantity] = useState(1)
@@ -22,9 +21,6 @@ export default function ProductCard({ product, onAddToCart }) {
   // Obtener el producto más actualizado como hace el carrito
   useEffect(() => {
     let active = true
-    console.log('🧩 ProductCard v2: registrando useEffect para id:', product?.id, 'supabase?', Boolean(supabase))
-    // Log para confirmar que el efecto se ejecuta y con qué ID
-    console.log('🛰️ ProductCard v2: iniciando live fetch para ID:', product?.id, 'URL:', process.env.NEXT_PUBLIC_SUPABASE_URL)
     ;(async () => {
       try {
         const { data, error } = await supabase
@@ -43,13 +39,12 @@ export default function ProductCard({ product, onAddToCart }) {
           .single()
 
         if (!error && data && active) {
-          console.log('🛰️ ProductCard v2 live fetch OK:', { id: data.id, final_price: data.final_price, price_raw: data.price_raw, type: typeof data.final_price })
           setLiveProduct(prev => ({ ...prev, ...data }))
         } else if (error) {
-          console.warn('🛰️ ProductCard v2 live fetch ERROR:', error)
+          // swallow
         }
       } catch (err) {
-        console.error('🛰️ ProductCard v2 live fetch THROW:', err)
+        // swallow
       }
     })()
     return () => { active = false }
@@ -61,14 +56,6 @@ export default function ProductCard({ product, onAddToCart }) {
   // Enfoque simplificado para obtener la URL de imagen
   const getImageUrl = () => {
     if (imageError) return null
-    
-    // DEBUG: Log de datos completos
-    console.log('🧪 v2 ANALYZING PRODUCT:', product.name)
-    console.log('📊 RAW DATA v2:', {
-      image_file_url: product.image_file_url,
-      image_url: product.image_url,
-      all_product_data: product
-    })
     
     // Lista de posibles URLs en orden de prioridad
     const possibleUrls = []
@@ -99,33 +86,19 @@ export default function ProductCard({ product, onAddToCart }) {
       }
     }
     
-    console.log('🎯 v2 POSSIBLE URLS:', possibleUrls)
-    
     if (possibleUrls.length > 0) {
       const selected = possibleUrls[0]
-      console.log(`✅ v2 SELECTED: ${selected.type} - ${selected.url}`)
       return selected.url
     }
-    
-    console.log('❌ v2 NO VALID URL FOUND')
     return null
   }
 
   const imageUrl = getImageUrl()
   
-  // Usar las utilidades de diagnóstico para registrar datos de precios
+  // Sin logs en producción
   logProductPriceData(product, 'ProductCard v2');
-  
-  console.log('🔍 ProductCard v2 - Datos completos del producto:', {
-    id: product.id,
-    name: product.name,
-    final_price: product.final_price,
-    final_price_type: typeof product.final_price,
-    price_raw: product.price_raw
-  });
 
   const fpCandidate = (liveProduct?.final_price ?? product?.final_price);
-  console.log('🔎 ProductCard v2 fpCandidate:', fpCandidate, 'typeof:', typeof fpCandidate)
   let finalPriceValue = 0;
   if (typeof fpCandidate === 'number' && isFinite(fpCandidate)) {
     finalPriceValue = fpCandidate;
@@ -136,13 +109,8 @@ export default function ProductCard({ product, onAddToCart }) {
   } else {
     finalPriceValue = getPriceToDisplay(liveProduct ?? product);
   }
-  console.log('✅ ProductCard v2 finalPriceValue:', finalPriceValue)
-
   // Formateo final para UI
-  console.log('🧮 ProductCard v2 → llamando formatPriceConsistently con:', finalPriceValue, 'tipo:', typeof finalPriceValue)
   const formattedPrice = formatPriceConsistently(finalPriceValue);
-  
-  console.log('💲 v2 Precio formateado final:', formattedPrice);
   
   const handleAddToCart = () => {
     if (onAddToCart) {
@@ -169,18 +137,11 @@ export default function ProductCard({ product, onAddToCart }) {
   }
 
   const handleImageError = () => {
-    console.log('🚫 v2 Error loading image for product:', product.name, 'URL:', imageUrl)
-    console.log('🔍 v2 Available image data:', {
-      image_file_url: product.image_file_url,
-      image_url: product.image_url,
-      attempted_url: imageUrl
-    })
     setImageError(true)
     setImageLoading(false)
   }
 
   const handleImageLoad = () => {
-    console.log('✅ v2 Image loaded successfully for product:', product.name, 'URL:', imageUrl)
     setImageLoading(false)
   }
 
@@ -191,7 +152,7 @@ export default function ProductCard({ product, onAddToCart }) {
       className="group h-full"
     >
       <Card className="overflow-hidden border-gray-200 hover:border-blue-300 transition-all duration-300 hover:shadow-lg bg-white h-full flex flex-col isolate">
-        <CardContent className="p-3 sm:p-4 flex flex-col h-full relative">
+  <CardContent className="p-2.5 sm:p-4 flex flex-col h-full relative">
           <div className="flex flex-col gap-3 h-full isolate">
             {/* Imagen más grande en la parte superior */}
             <button 
@@ -226,13 +187,13 @@ export default function ProductCard({ product, onAddToCart }) {
             {/* Contenido del producto */}
             <div className="flex-1 flex flex-col justify-between space-y-2">
               <div className="mb-1">
-                <h3 className="font-semibold text-gray-900 line-clamp-2 text-balance leading-tight text-sm sm:text-base">
+                <h3 className="font-semibold text-gray-900 line-clamp-2 text-balance leading-tight text-[13px] sm:text-sm">
                   {product.name}
                 </h3>
               </div>
               
               <div>
-                <p className="text-base sm:text-lg font-bold text-blue-600 mb-0.5">
+                <p className="text-[15px] sm:text-base font-bold text-blue-600 mb-0.5">
                   {formattedPrice}
                 </p>
                 
@@ -244,10 +205,10 @@ export default function ProductCard({ product, onAddToCart }) {
               </div>
               
               <div className="flex flex-col gap-2 mt-auto pt-2">
-                <div className="flex items-center justify-center gap-1">
+        <div className="flex items-center justify-center gap-1">
                   <button 
                     onClick={decrementQuantity}
-                    className="w-7 h-7 rounded-full bg-gray-200 hover:bg-gray-300 flex items-center justify-center text-gray-700"
+          className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gray-200 hover:bg-gray-300 flex items-center justify-center text-gray-700"
                     disabled={quantity <= 1}
                     type="button"
                     aria-label="Disminuir cantidad"
@@ -261,7 +222,7 @@ export default function ProductCard({ product, onAddToCart }) {
                     onChange={handleQuantityChange}
                     onBlur={handleQuantityBlur}
                     min="1"
-                    className="w-10 h-7 text-center text-sm font-semibold border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 selection:bg-cyan-200"
+                    className="w-10 h-7 sm:w-12 sm:h-8 text-center text-sm font-semibold border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 selection:bg-cyan-200"
                     aria-label="Cantidad"
                     style={{ 
                       appearance: 'textfield',
@@ -273,7 +234,7 @@ export default function ProductCard({ product, onAddToCart }) {
                   
                   <button 
                     onClick={incrementQuantity}
-                    className="w-7 h-7 rounded-full bg-blue-500 hover:bg-blue-600 flex items-center justify-center text-white"
+                    className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-blue-500 hover:bg-blue-600 flex items-center justify-center text-white"
                     type="button"
                     aria-label="Aumentar cantidad"
                   >
@@ -283,7 +244,7 @@ export default function ProductCard({ product, onAddToCart }) {
                 
                 <motion.button
                   onClick={handleAddToCart}
-                  className="w-full h-10 rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-sm flex items-center justify-center gap-1.5"
+                  className="w-full h-9 sm:h-10 rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-sm flex items-center justify-center gap-1.5 text-sm"
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.95 }}
                   animate={{

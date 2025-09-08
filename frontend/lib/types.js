@@ -37,22 +37,13 @@ export const formatPrice = (finalPrice) => {
     const integerPart = Math.floor(Number(num)).toString();
     return integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
   };
-  
-  // Identificar el origen de la llamada para diagnóstico
-  const stackLines = new Error().stack.split('\n').slice(2);
-  const caller = stackLines[0]?.trim() || 'Desconocido';
-  
-  // Debug log con origen
-  console.log(`🔍 FORMATO DE PRECIO [${caller.substring(0, 50)}...]:`);
-  console.log(`   - VALOR ENTRADA: ${finalPrice} (${typeof finalPrice})`);
-  
+
   // VALIDACIÓN EXTRA AGRESIVA: Asegurarse que sea un número válido
   let finalPriceNum;
   
   // 1. Si ya es un número, usarlo directamente
   if (typeof finalPrice === 'number' && !isNaN(finalPrice)) {
     finalPriceNum = finalPrice;
-    console.log(`   ✓ Ya es un número válido: ${finalPriceNum}`);
   } 
   // 2. Si es string, intentar convertir directamente
   else if (typeof finalPrice === 'string') {
@@ -60,29 +51,18 @@ export const formatPrice = (finalPrice) => {
     const cleanedString = finalPrice.replace(/[^\d.-]/g, '');
     finalPriceNum = Number(cleanedString);
     
-    if (!isNaN(finalPriceNum)) {
-      console.log(`   ✓ Convertido de string: "${finalPrice}" → ${finalPriceNum}`);
-    } else {
-      console.warn(`   ⚠️ No se pudo convertir string: "${finalPrice}"`);
+    if (isNaN(finalPriceNum)) {
       finalPriceNum = 0;
     }
   } 
   // 3. Para cualquier otro tipo, intentar Number()
   else {
     finalPriceNum = Number(finalPrice);
-    
-    if (!isNaN(finalPriceNum)) {
-      console.log(`   ✓ Convertido con Number(): ${finalPriceNum}`);
-    } else {
-      console.warn(`   ⚠️ Conversión fallida: ${String(finalPrice)}`);
+    if (isNaN(finalPriceNum)) {
       finalPriceNum = 0;
     }
   }
   
   // Formatear con separador de miles
-  const formattedResult = `₡${formatWithThousandsSeparator(finalPriceNum)}`;
-  console.log(`✅ PRECIO FORMATEADO [${caller.substring(0, 30)}...]: ${formattedResult}`);
-  console.log(`   → VALOR FINAL NUMÉRICO: ${finalPriceNum}`);
-  
-  return formattedResult;
+  return `₡${formatWithThousandsSeparator(finalPriceNum)}`;
 }
