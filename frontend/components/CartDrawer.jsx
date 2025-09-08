@@ -8,40 +8,15 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { formatPrice } from '@/lib/types'
+import { logProductPriceData, getPriceToDisplay, formatPriceConsistently } from '@/lib/price-debug'
 
 export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantity, onRemoveItem }) {
   const totalItems = cartItems.reduce((sum, item) => sum + item.quantity, 0)
   const totalPrice = cartItems.reduce((sum, item) => {
-    const price = item.product.price_numeric || 0
-    return sum + (price * item.quantity)
+    // Usar final_price robustamente
+    const unit = getPriceToDisplay(item.product);
+    return sum + unit * item.quantity
   }, 0)
-
-  const formatTotalPrice = (total) => {
-    // Función personalizada para asegurar que los números de cuatro dígitos también tengan separador
-    const formatWithThousandsSeparator = (num) => {
-      // Convertir a string y eliminar cualquier parte decimal
-      const integerPart = Math.floor(num).toString();
-      
-      // Formatear con puntos como separadores de miles
-      if (integerPart.length <= 3) {
-        // No necesita separador
-        return integerPart;
-      } else {
-        // Agregar separadores cada tres dígitos desde el final
-        let result = '';
-        for (let i = 0; i < integerPart.length; i++) {
-          if (i > 0 && (integerPart.length - i) % 3 === 0) {
-            result += '.';
-          }
-          result += integerPart[i];
-        }
-        return result;
-      }
-    };
-    
-    // Usar el símbolo de colón (₡) y nuestra función personalizada
-    return `₡${formatWithThousandsSeparator(total)}`;
-  }
 
   return (
     <AnimatePresence>
@@ -106,7 +81,7 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
               <div className="border-t border-gray-200 p-6 space-y-4">
                 <div className="flex items-center justify-between text-lg font-semibold">
                   <span className="text-gray-900">Total:</span>
-                  <span className="text-blue-600">{formatTotalPrice(totalPrice)}</span>
+                  <span className="text-blue-600">{formatPriceConsistently(totalPrice)}</span>
                 </div>
                 <Button className="w-full bg-blue-600 hover:bg-blue-700 text-white" size="lg">
                   Proceder al Checkout
@@ -126,25 +101,55 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
 function CartItem({ item, onUpdateQuantity, onRemoveItem }) {
   const { product, quantity } = item
   const [imageError, setImageError] = useState(false)
+  const [imageLoading, setImageLoading] = useState(true)
   
   const getImageUrl = () => {
     if (imageError) return null
     
+    const possibleUrls = []
+    
     if (product.image_file_url) {
-      const cleanUrl = product.image_file_url.replace(/^\/+/, '')
-      return `https://wjgitkxfzdmrblqzwryf.supabase.co/storage/v1/object/public/product-images/${cleanUrl}`
+      const fileUrl = String(product.image_file_url).trim()
+      
+      if (fileUrl && fileUrl !== 'null' && fileUrl !== 'undefined' && fileUrl.length > 0) {
+        if (fileUrl.includes('http')) {
+          const cleanUrl = fileUrl.replace(/\?+$/, '').trim()
+          possibleUrls.push({ type: 'full_url_cleaned', url: cleanUrl })
+        } else {
+          const cleanFile = fileUrl.replace(/^\/+/, '').replace(/\?+$/, '')
+          if (cleanFile) {
+            const supabaseUrl = `https://wjgitkxfzdmrblqzwryf.supabase.co/storage/v1/object/public/product-images/${cleanFile}`
+            possibleUrls.push({ type: 'supabase_constructed', url: supabaseUrl })
+          }
+        }
+      }
     }
     
-    if (product.image_url && product.image_url.startsWith('http')) {
-      return product.image_url
+    if (product.image_url) {
+      const extUrl = String(product.image_url).trim()
+      if (extUrl && extUrl.startsWith('http')) {
+        possibleUrls.push({ type: 'external_url', url: extUrl })
+      }
     }
     
-    return null
+    return possibleUrls.length > 0 ? possibleUrls[0].url : null
   }
 
   const imageUrl = getImageUrl()
-  const formattedPrice = formatPrice(product.price_numeric, product.price_raw, product.currency)
-  const itemTotal = (product.price_numeric || 0) * quantity
+  // Usar las utilidades de diagnóstico para registrar datos de precios
+  logProductPriceData(product, 'CartItem');
+  
+  console.log('🛒 CARTITEM - Datos de precio:', {
+    name: product.name,
+    final_price: product.final_price,
+    final_price_type: typeof product.final_price
+  });
+  
+  // Precio unitario y total basados en final_price (robusto)
+  const finalPriceNum = getPriceToDisplay(product);
+  const formattedPrice = formatPriceConsistently(finalPriceNum);
+  const itemTotal = finalPriceNum * quantity;
+  const formattedTotal = formatPriceConsistently(itemTotal);
 
   return (
     <Card className="bg-gray-50 border-gray-200">
@@ -157,9 +162,10 @@ function CartItem({ item, onUpdateQuantity, onRemoveItem }) {
                 src={imageUrl}
                 alt={product.name}
                 fill
-                className="object-cover"
+                className={`object-cover transition-opacity duration-300 ${imageLoading ? 'opacity-0' : 'opacity-100'}`}
                 sizes="64px"
                 onError={() => setImageError(true)}
+                onLoad={() => setImageLoading(false)}
               />
             ) : (
               <ImageIcon className="h-6 w-6 text-gray-400" />
@@ -204,10 +210,7 @@ function CartItem({ item, onUpdateQuantity, onRemoveItem }) {
 
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-gray-900">
-                  {new Intl.NumberFormat('es-CR', { 
-                    style: 'currency', 
-                    currency: 'CRC' 
-                  }).format(itemTotal)}
+                  {formattedTotal}
                 </span>
                 <Button
                   variant="ghost"

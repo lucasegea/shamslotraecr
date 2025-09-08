@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
 
-// Fetch all categories with product counts - Fixed duplicates
+// Fetch all categories with product counts
 export async function getCategories() {
   try {
     const { data, error } = await supabase
@@ -14,13 +14,12 @@ export async function getCategories() {
       return []
     }
 
-    // Remove duplicates by name and fix product counts
+    // Remove duplicates by name
     const categoriesMap = new Map()
     
     for (const category of data || []) {
       const key = category.name
       if (categoriesMap.has(key)) {
-        // If duplicate, combine product counts
         const existing = categoriesMap.get(key)
         existing.product_count = (existing.product_count || 0) + (category.product_count || 0)
       } else {
@@ -28,7 +27,7 @@ export async function getCategories() {
       }
     }
 
-    // Get actual product counts from products table
+    // Get actual product counts
     const categoriesWithActualCounts = []
     for (const [name, category] of categoriesMap) {
       const { count } = await supabase
@@ -43,7 +42,7 @@ export async function getCategories() {
       })
     }
 
-    return categoriesWithActualCounts // Removed filter for product_count > 0
+    return categoriesWithActualCounts
   } catch (error) {
     console.error('Error in getCategories:', error)
     return []
@@ -74,7 +73,7 @@ export async function getProducts(options = {}) {
         image_url,
         image_file_url,
         price_raw,
-        price_numeric,
+        final_price,
         currency,
         first_seen_at,
         last_seen_at,
@@ -94,7 +93,7 @@ export async function getProducts(options = {}) {
 
     // Sorting
     if (sortBy === 'price') {
-      query = query.order('price_numeric', { ascending: sortOrder === 'asc', nullsLast: true })
+      query = query.order('final_price', { ascending: sortOrder === 'asc', nullsLast: true })
     } else if (sortBy === 'date') {
       query = query.order('last_seen_at', { ascending: sortOrder === 'asc', nullsLast: true })
     } else {
@@ -114,6 +113,17 @@ export async function getProducts(options = {}) {
     if (error) {
       console.error('Error fetching products:', error)
       return { products: [], totalCount: 0 }
+    }
+
+    // Log some debugging info
+    if (data && data.length > 0) {
+      console.log('🔍 Datos de los primeros productos:', data.slice(0, 2).map(p => ({
+        id: p.id,
+        name: p.name,
+        final_price: p.final_price,
+        final_price_type: typeof p.final_price,
+        price_raw: p.price_raw
+      })));
     }
 
     return { 
@@ -167,7 +177,7 @@ export async function searchProducts(searchTerm, limit = 20) {
         image_url,
         image_file_url,
         price_raw,
-        price_numeric,
+        final_price,
         currency,
         last_seen_at,
         categories!inner(id, name)

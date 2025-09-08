@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Search, ShoppingBag, Sparkles, ShoppingCart } from 'lucide-react'
 
 import { getCategories, getProducts } from '@/lib/database'
+import { supabase } from '@/lib/supabase'
 import CategorySidebar from '@/components/CategorySidebar'
 import ProductGrid from '@/components/ProductGrid'
 import ProductPagination from '@/components/ProductPagination'
@@ -104,6 +105,24 @@ export default function HomePage() {
           page: currentPage
         })
         
+        // Debug detallado: verificar los datos de productos antes de establecerlos
+        console.log('🔄 Productos recibidos en page.js:', result.products.slice(0, 3).map(p => ({
+          id: p.id,
+          name: p.name,
+          final_price: p.final_price,
+          final_price_type: typeof p.final_price,
+          final_price_numeric: Number(p.final_price),
+          price_raw: p.price_raw
+        })));
+        
+        // No modificamos los productos, simplemente mostramos información
+        console.log('👀 Productos en page.js antes de establecerlos:', result.products.slice(0, 2).map(p => ({
+          name: p.name,
+          final_price: p.final_price,
+          final_price_type: typeof p.final_price
+        })));
+        
+        // Usar los productos directamente sin modificar
         setProducts(result.products)
         setTotalProducts(result.totalCount)
         
@@ -151,26 +170,87 @@ export default function HomePage() {
   }
 
   // Cart functions
-  const handleAddToCart = (product, quantity = 1) => {
+  const handleAddToCart = async (product, quantity = 1) => {
     const addQuantity = quantity || 1; // Asegurar que sea al menos 1
     
-    setCartItems(prevItems => {
-      const existingItem = prevItems.find(item => item.product.id === product.id)
+    try {
+      // Obtener el producto más actualizado directamente de la base de datos
+      const { data, error } = await supabase
+        .from('products')
+        .select(`
+          id, 
+          name,
+          product_url, 
+          image_url, 
+          image_file_url, 
+          price_raw, 
+          final_price, 
+          currency
+        `)
+        .eq('id', product.id)
+        .single();
       
-      if (existingItem) {
-        return prevItems.map(item =>
-          item.product.id === product.id
-            ? { ...item, quantity: item.quantity + addQuantity }
-            : item
-        )
-      } else {
-        return [...prevItems, { product, quantity: addQuantity }]
+      if (error) {
+        console.error('Error al obtener producto actualizado:', error);
+        // Continuar con el producto original si hay un error
       }
-    })
-    
-    // Animate cart icon
-    setIsCartBouncing(true)
-    setTimeout(() => setIsCartBouncing(false), 800)
+      
+      // Usar el producto actualizado si está disponible, de lo contrario usar el original
+      const updatedProduct = data || product;
+      
+      // Log detallado para depuración, enfocado en final_price
+      console.log('🛒 AGREGANDO AL CARRITO:', {
+        original: {
+          id: product.id,
+          name: product.name,
+          final_price: product.final_price,
+          final_price_type: typeof product.final_price
+        },
+        updated: {
+          id: updatedProduct.id,
+          name: updatedProduct.name,
+          final_price: updatedProduct.final_price,
+          final_price_type: typeof updatedProduct.final_price
+        }
+      });
+      
+      setCartItems(prevItems => {
+        const existingItem = prevItems.find(item => item.product.id === updatedProduct.id);
+        
+        if (existingItem) {
+          return prevItems.map(item =>
+            item.product.id === updatedProduct.id
+              ? { ...item, quantity: item.quantity + addQuantity }
+              : item
+          );
+        } else {
+          return [...prevItems, { product: updatedProduct, quantity: addQuantity }];
+        }
+      });
+      
+      // Animate cart icon
+      setIsCartBouncing(true);
+      setTimeout(() => setIsCartBouncing(false), 800);
+    } catch (err) {
+      console.error('Error en handleAddToCart:', err);
+      // Fallback: usar el producto original si algo falla
+      setCartItems(prevItems => {
+        const existingItem = prevItems.find(item => item.product.id === product.id);
+        
+        if (existingItem) {
+          return prevItems.map(item =>
+            item.product.id === product.id
+              ? { ...item, quantity: item.quantity + addQuantity }
+              : item
+          );
+        } else {
+          return [...prevItems, { product, quantity: addQuantity }];
+        }
+      });
+      
+      setIsCartBouncing(true);
+      setTimeout(() => setIsCartBouncing(false), 800);
+    }
   }
 
   const handleUpdateQuantity = (productId, newQuantity) => {

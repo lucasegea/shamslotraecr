@@ -1,7 +1,7 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import ProductCard from './ProductCard'
+import ProductCard from './ProductCard_v2'
 import { Card, CardContent } from '@/components/ui/card'
 import { Package, Search } from 'lucide-react'
 
