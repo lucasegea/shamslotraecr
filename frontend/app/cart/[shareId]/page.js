@@ -1,8 +1,7 @@
 export const dynamic = 'force-dynamic'
+import HomePage from '@/app/page'
 
-export default function CartSharePage({ params }) {
-  // Esta página existe para URL canónica /cart/:shareId.
-  // El Home ya detecta /cart/:id y carga ese carrito.
-  // Renderizamos un contenedor mínimo para evitar duplicar lógica.
-  return null
+export default function CartSharePage() {
+  // Reutilizamos la Home para que /cart/:id muestre la misma UI
+  return <HomePage />
 }
