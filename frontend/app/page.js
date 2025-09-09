@@ -173,7 +173,7 @@ export default function HomePage() {
           currency
         `)
         .eq('id', product.id)
-        .single();
+  .single();
       
       if (error) {
         console.error('Error al obtener producto actualizado:', error);

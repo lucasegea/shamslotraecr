@@ -6,7 +6,6 @@ export async function getCategories() {
     const { data, error } = await supabase
       .from('categories')
       .select('id, external_id, name, product_count')
-      .eq('seller_id', 1)
       .order('name', { ascending: true })
 
     if (error) {
@@ -34,7 +33,6 @@ export async function getCategories() {
         .from('products')
         .select('*', { count: 'exact', head: true })
         .eq('category_id', category.id)
-        .eq('seller_id', 1)
 
       categoriesWithActualCounts.push({
         ...category,
@@ -62,7 +60,7 @@ export async function getProducts(options = {}) {
     } = options
 
     // Base query for fetching records with count
-    let query = supabase
+  let query = supabase
       .from('products')
       .select(`
         id,
@@ -77,9 +75,9 @@ export async function getProducts(options = {}) {
         currency,
         first_seen_at,
         last_seen_at,
-        seller_id
+    seller_id
       `, { count: 'exact' })
-      .eq('seller_id', 1)
+      
 
     // Category filter
     if (categoryId) {
@@ -130,14 +128,13 @@ export async function getProducts(options = {}) {
 // Get a single product by ID
 export async function getProduct(id) {
   try {
-    const { data, error } = await supabase
+  const { data, error } = await supabase
       .from('products')
       .select(`
         *,
         categories!inner(id, name)
       `)
       .eq('id', id)
-      .eq('seller_id', 1)
       .single()
 
     if (error) {
@@ -159,7 +156,7 @@ export async function searchProducts(searchTerm, limit = 20) {
       return []
     }
 
-    const { data, error } = await supabase
+  const { data, error } = await supabase
       .from('products')
       .select(`
         id,
@@ -173,7 +170,6 @@ export async function searchProducts(searchTerm, limit = 20) {
         last_seen_at,
         categories!inner(id, name)
       `)
-      .eq('seller_id', 1)
       .ilike('name', `%${searchTerm}%`)
       .order('name', { ascending: true })
       .limit(limit)
