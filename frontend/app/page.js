@@ -407,13 +407,22 @@ export default function HomePage() {
                   </div>
                   <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform duration-200 group-open:rotate-180" />
                 </summary>
-                <div className="pt-3">
+                <div className="pt-0 overflow-hidden transition-all duration-200 ease-in-out max-h-0 opacity-0 group-open:max-h-[60vh] group-open:opacity-100">
                   <CategorySidebar
                     categories={categories}
                     selectedCategory={selectedCategory}
                     onCategorySelect={(cat) => {
+                      // Mostrar esqueletos inmediatamente para evitar parpadeos
+                      setProductsLoading(true)
                       handleCategorySelect(cat)
-                      if (mobileCategoriesRef.current) {
+                      // Cerrar el acordeón en el siguiente frame para que se vea la transición
+                      if (typeof requestAnimationFrame === 'function') {
+                        requestAnimationFrame(() => {
+                          if (mobileCategoriesRef.current) {
+                            mobileCategoriesRef.current.open = false
+                          }
+                        })
+                      } else if (mobileCategoriesRef.current) {
                         mobileCategoriesRef.current.open = false
                       }
                     }}
