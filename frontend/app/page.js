@@ -257,9 +257,37 @@ export default function HomePage() {
       const sp = new URLSearchParams(window.location.search)
       const existingIdRaw = sp.get('cartId')
       const existingId = existingIdRaw && existingIdRaw !== 'null' && existingIdRaw !== 'undefined' ? existingIdRaw : null
+      // Si hay cartId en la URL, usarlo y guardarlo para futuras sesiones
       if (existingId) {
         try {
           const res = await fetch(`/api/cart/${existingId}`, { cache: 'no-store' })
+          if (res.ok) {
+            const data = await res.json()
+            setCartId(data.id)
+            try { localStorage.setItem('sharedCartId', data.id) } catch {}
+            const pairs = Array.isArray(data.items) ? data.items : []
+            const ids = pairs.map(([id]) => id)
+            if (ids.length) {
+              const { data: productsData } = await supabase
+                .from('products')
+                .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
+                .in('id', ids)
+              const byId = new Map((productsData || []).map(p => [p.id, p]))
+              setCartItems(pairs
+                .map(([pid, qty]) => ({ product: byId.get(pid), quantity: qty }))
+                .filter(i => i.product)
+              )
+            }
+          }
+        } catch {}
+        return
+      }
+      // Si no hay cartId en la URL, intentar restaurar desde localStorage
+      let savedId = null
+      try { savedId = localStorage.getItem('sharedCartId') || null } catch {}
+      if (savedId) {
+        try {
+          const res = await fetch(`/api/cart/${savedId}`, { cache: 'no-store' })
           if (res.ok) {
             const data = await res.json()
             setCartId(data.id)
@@ -278,7 +306,6 @@ export default function HomePage() {
             }
           }
         } catch {}
-        return
       }
   const enc = sp.get('cart')
       if (enc) {
@@ -352,7 +379,12 @@ export default function HomePage() {
   const getShareLink = async () => {
     if (typeof window === 'undefined') return ''
     const items = cartItems.filter(ci => ci?.product?.id && ci.quantity > 0).map(ci => [ci.product.id, ci.quantity])
+    // Reusar siempre un cartId existente, ya sea en estado o guardado
     let id = cartId
+    if (!id) {
+      try { id = localStorage.getItem('sharedCartId') || null } catch {}
+      if (id) setCartId(id)
+    }
     try {
       if (!id) {
         const res = await fetch('/api/cart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) })
@@ -361,6 +393,7 @@ export default function HomePage() {
           if (data && data.id) {
             id = data.id
             setCartId(id)
+            try { localStorage.setItem('sharedCartId', id) } catch {}
           }
         }
       } else {
