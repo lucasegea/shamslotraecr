@@ -370,12 +370,21 @@ export default function HomePage() {
     const url = new URL(window.location.href)
     if (id) {
       url.searchParams.set('cartId', id)
-    } else {
-      url.searchParams.delete('cartId')
+      url.searchParams.delete('cart')
+      window.history.replaceState({}, '', url.toString())
+      return url.toString()
     }
-    url.searchParams.delete('cart')
-    window.history.replaceState({}, '', url.toString())
-    return url.toString()
+    // Fallback: encoded cart in URL so el link nunca sale “común”
+    try {
+      const json = JSON.stringify(items)
+      const encoded = typeof btoa === 'function' ? btoa(json) : encodeURIComponent(json)
+      url.searchParams.set('cart', encoded)
+      url.searchParams.delete('cartId')
+      // No es necesario modificar history aquí, devolvemos el link listo para compartir
+      return url.toString()
+    } catch {
+      return url.toString()
+    }
   }
 
   const filteredProductsCount = useMemo(() => {
