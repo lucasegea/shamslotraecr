@@ -2,6 +2,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef, createContext } from 'react'
+import { v4 as uuidv4 } from 'uuid'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Search, Waves, ShoppingCart, Filter, ChevronDown } from 'lucide-react'
 
@@ -412,27 +413,15 @@ export default function HomePage() {
       }
     }
     try {
+      // Si aún no hay id, generamos uno en cliente y hacemos PUT (upsert) para garantizar estabilidad
       if (!id) {
-        // Evitar crear múltiples IDs en clics concurrentes
-        if (!creatingCartRef.current) {
-          creatingCartRef.current = (async () => {
-            const res = await fetch('/api/cart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) })
-            if (!res.ok) throw new Error('create failed')
-            const data = await res.json()
-            return data?.id || null
-          })()
-        }
-        const newId = await creatingCartRef.current.catch(() => null)
-        creatingCartRef.current = null
-        if (newId) {
-          id = newId
-          setCartId(id)
-          cartIdRef.current = id
-          try { localStorage.setItem('sharedCartId', id) } catch {}
-        }
-      } else {
-        await fetch(`/api/cart/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) })
+        id = uuidv4()
+        setCartId(id)
+        cartIdRef.current = id
+        try { localStorage.setItem('sharedCartId', id) } catch {}
       }
+      // Upsert en el backend con el id estable
+      await fetch(`/api/cart/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) })
     } catch {}
     const url = new URL(window.location.href)
     if (id) {
