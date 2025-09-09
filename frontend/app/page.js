@@ -292,7 +292,7 @@ export default function HomePage() {
       if (existingId) {
         try {
           if (useSupabaseCartRef.current) {
-            const res = await fetch(`/cart/${existingId}`, { cache: 'no-store' })
+            const res = await fetch(`/api/cart/${existingId}`, { cache: 'no-store' })
             if (res.ok) {
               const data = await res.json()
               setCartId(existingId)
@@ -320,9 +320,9 @@ export default function HomePage() {
                   const json = typeof atob === 'function' ? atob(seedEnc) : decodeURIComponent(seedEnc)
                   const seedPairs = JSON.parse(json)
                   if (Array.isArray(seedPairs) && seedPairs.length) {
-                    await fetch(`/cart/${existingId}?action=seed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seed: seedPairs }) })
+                    await fetch(`/api/cart/${existingId}?action=seed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seed: seedPairs }) })
                     // Reintentar GET
-                    const again = await fetch(`/cart/${existingId}`, { cache: 'no-store' })
+                    const again = await fetch(`/api/cart/${existingId}`, { cache: 'no-store' })
                     if (again.ok) {
                       const d2 = await again.json()
                       revisionRef.current = d2.revision || revisionRef.current
@@ -377,7 +377,7 @@ export default function HomePage() {
       try { savedId = localStorage.getItem('sharedCartId') || null } catch {}
     if (!restored && savedId) {
         try {
-          const res = useSupabaseCartRef.current ? await fetch(`/cart/${savedId}`, { cache: 'no-store' }) : await fetch(`/api/cart/${savedId}`, { cache: 'no-store' })
+          const res = useSupabaseCartRef.current ? await fetch(`/api/cart/${savedId}`, { cache: 'no-store' }) : await fetch(`/api/cart/${savedId}`, { cache: 'no-store' })
           if (res.ok) {
             const data = await res.json()
             const idSet = useSupabaseCartRef.current ? savedId : data.id
@@ -460,7 +460,7 @@ export default function HomePage() {
         const items = valid.map(ci => [ci.product.id, ci.quantity])
         if (items.length) {
           if (useSupabaseCartRef.current || (typeof window !== 'undefined' && window.location.pathname.startsWith('/cart/'))) {
-            await fetch(`/cart/${id}?action=seed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seed: items }) })
+            await fetch(`/api/cart/${id}?action=seed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seed: items }) })
           } else {
             const details = valid.map(ci => ({ id: ci.product.id, name: ci.product.name, product_url: ci.product.product_url, image_url: ci.product.image_url, image_file_url: ci.product.image_file_url, final_price: ci.product.final_price, price_raw: ci.product.price_raw, currency: ci.product.currency }))
             await fetch(`/api/cart/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items, details }) })
@@ -483,7 +483,7 @@ export default function HomePage() {
     async function tick() {
       try {
         if (useSupabaseCartRef.current || (typeof window !== 'undefined' && window.location.pathname.startsWith('/cart/'))) {
-          const res = await fetch(`/cart/${cartId}`, { cache: 'no-store' })
+          const res = await fetch(`/api/cart/${cartId}`, { cache: 'no-store' })
           if (res.ok) {
             const data = await res.json()
             const changed = typeof data.revision === 'number' && data.revision !== revisionRef.current
@@ -565,7 +565,7 @@ export default function HomePage() {
           }
           for (const pid of prevMap.keys()) { if (!currentMap.has(pid)) ops.push({ op: 'remove', productId: pid }) }
           if (ops.length) {
-            const res = await fetch(`/cart/${cartId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'If-Match': `W/"${revisionRef.current}"` }, body: JSON.stringify({ ifRevision: revisionRef.current, ops }) })
+            const res = await fetch(`/api/cart/${cartId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'If-Match': `W/"${revisionRef.current}"` }, body: JSON.stringify({ ifRevision: revisionRef.current, ops }) })
             if (res.status === 409) {
               const data = await res.json().catch(() => null)
               if (data && Array.isArray(data.items)) {
