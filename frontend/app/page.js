@@ -36,6 +36,8 @@ export default function HomePage() {
   const [isCartOpen, setIsCartOpen] = useState(false)
   const [isCartBouncing, setIsCartBouncing] = useState(false)
   const [cartId, setCartId] = useState(null)
+  const cartIdRef = useRef(null)
+  const creatingCartRef = useRef(null)
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1)
@@ -264,6 +266,7 @@ export default function HomePage() {
           if (res.ok) {
             const data = await res.json()
             setCartId(data.id)
+            cartIdRef.current = data.id
             try { localStorage.setItem('sharedCartId', data.id) } catch {}
             const pairs = Array.isArray(data.items) ? data.items : []
             const ids = pairs.map(([id]) => id)
@@ -291,6 +294,14 @@ export default function HomePage() {
           if (res.ok) {
             const data = await res.json()
             setCartId(data.id)
+            cartIdRef.current = data.id
+            // Asegurar que la URL también tenga el cartId restaurado
+            try {
+              const url = new URL(window.location.href)
+              url.searchParams.set('cartId', data.id)
+              url.searchParams.delete('cart')
+              window.history.replaceState({}, '', url.toString())
+            } catch {}
             const pairs = Array.isArray(data.items) ? data.items : []
             const ids = pairs.map(([id]) => id)
             if (ids.length) {
@@ -380,21 +391,44 @@ export default function HomePage() {
     if (typeof window === 'undefined') return ''
     const items = cartItems.filter(ci => ci?.product?.id && ci.quantity > 0).map(ci => [ci.product.id, ci.quantity])
     // Reusar siempre un cartId existente, ya sea en estado o guardado
-    let id = cartId
+    let id = cartIdRef.current || cartId
     if (!id) {
+      // Intentar recuperar desde localStorage
       try { id = localStorage.getItem('sharedCartId') || null } catch {}
-      if (id) setCartId(id)
+      // Intentar recuperar desde la URL actual si aún no hay id
+      if (!id) {
+        try {
+          const spNow = new URLSearchParams(window.location.search)
+          const qId = spNow.get('cartId')
+          if (qId && qId !== 'null' && qId !== 'undefined') {
+            id = qId
+            try { localStorage.setItem('sharedCartId', id) } catch {}
+          }
+        } catch {}
+      }
+      if (id) {
+        setCartId(id)
+        cartIdRef.current = id
+      }
     }
     try {
       if (!id) {
-        const res = await fetch('/api/cart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) })
-        if (res.ok) {
-          const data = await res.json()
-          if (data && data.id) {
-            id = data.id
-            setCartId(id)
-            try { localStorage.setItem('sharedCartId', id) } catch {}
-          }
+        // Evitar crear múltiples IDs en clics concurrentes
+        if (!creatingCartRef.current) {
+          creatingCartRef.current = (async () => {
+            const res = await fetch('/api/cart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) })
+            if (!res.ok) throw new Error('create failed')
+            const data = await res.json()
+            return data?.id || null
+          })()
+        }
+        const newId = await creatingCartRef.current.catch(() => null)
+        creatingCartRef.current = null
+        if (newId) {
+          id = newId
+          setCartId(id)
+          cartIdRef.current = id
+          try { localStorage.setItem('sharedCartId', id) } catch {}
         }
       } else {
         await fetch(`/api/cart/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) })
