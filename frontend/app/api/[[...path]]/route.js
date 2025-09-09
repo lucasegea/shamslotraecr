@@ -104,7 +104,9 @@ async function handleRoute(request, { params }) {
         { $set: { items, updated_at: new Date() } },
         { upsert: true }
       )
-      return handleCORS(NextResponse.json({ id }))
+      const updated = await db.collection('carts').findOne({ id })
+      const { _id, ...clean } = updated || { id }
+      return handleCORS(NextResponse.json(clean))
     }
 
     // Status endpoints - GET /api/status

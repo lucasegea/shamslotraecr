@@ -255,7 +255,8 @@ export default function HomePage() {
     async function restoreCartFromQuery() {
       if (typeof window === 'undefined') return
       const sp = new URLSearchParams(window.location.search)
-      const existingId = sp.get('cartId')
+      const existingIdRaw = sp.get('cartId')
+      const existingId = existingIdRaw && existingIdRaw !== 'null' && existingIdRaw !== 'undefined' ? existingIdRaw : null
       if (existingId) {
         try {
           const res = await fetch(`/api/cart/${existingId}`, { cache: 'no-store' })
@@ -279,7 +280,7 @@ export default function HomePage() {
         } catch {}
         return
       }
-      const enc = sp.get('cart')
+  const enc = sp.get('cart')
       if (enc) {
         try {
           const json = typeof atob === 'function' ? atob(enc) : decodeURIComponent(enc)
@@ -298,6 +299,42 @@ export default function HomePage() {
     }
     restoreCartFromQuery()
   }, [])
+
+  // Polling para sincronizar cambios desde otros usuarios en el mismo cartId
+  useEffect(() => {
+    if (!cartId) return
+    let stop = false
+    let lastUpdatedAt = null
+    async function tick() {
+      try {
+        const res = await fetch(`/api/cart/${cartId}`, { cache: 'no-store' })
+        if (res.ok) {
+          const data = await res.json()
+          // Si cambió updated_at, refrescar items
+          const changed = !lastUpdatedAt || (data.updated_at && data.updated_at !== lastUpdatedAt)
+          if (changed) {
+            lastUpdatedAt = data.updated_at || lastUpdatedAt
+            const pairs = Array.isArray(data.items) ? data.items : []
+            const ids = pairs.map(([id]) => id)
+            if (ids.length) {
+              const { data: productsData } = await supabase
+                .from('products')
+                .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
+                .in('id', ids)
+              const byId = new Map((productsData || []).map(p => [p.id, p]))
+              const next = pairs.map(([pid, qty]) => ({ product: byId.get(pid), quantity: qty })).filter(i => i.product)
+              setCartItems(next)
+            } else {
+              setCartItems([])
+            }
+          }
+        }
+      } catch {}
+      if (!stop) setTimeout(tick, 10000)
+    }
+    const t = setTimeout(tick, 5000)
+    return () => { stop = true; clearTimeout(t) }
+  }, [cartId])
 
   // Sincronizar carrito persistente al cambiar items (con debounce ligero)
   useEffect(() => {
@@ -321,15 +358,21 @@ export default function HomePage() {
         const res = await fetch('/api/cart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) })
         if (res.ok) {
           const data = await res.json()
-          id = data.id
-          setCartId(id)
+          if (data && data.id) {
+            id = data.id
+            setCartId(id)
+          }
         }
       } else {
         await fetch(`/api/cart/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) })
       }
     } catch {}
     const url = new URL(window.location.href)
-    url.searchParams.set('cartId', id)
+    if (id) {
+      url.searchParams.set('cartId', id)
+    } else {
+      url.searchParams.delete('cartId')
+    }
     url.searchParams.delete('cart')
     window.history.replaceState({}, '', url.toString())
     return url.toString()
