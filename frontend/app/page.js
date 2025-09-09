@@ -40,6 +40,7 @@ export default function HomePage() {
   const [cartId, setCartId] = useState(null)
   const cartIdRef = useRef(null)
   const creatingCartRef = useRef(null)
+  const isRestoringRef = useRef(false)
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1)
@@ -257,6 +258,7 @@ export default function HomePage() {
   // Restaurar carrito desde enlace compartido (?cartId= o ?cart=)
   useEffect(() => {
     async function restoreCartFromQuery() {
+  isRestoringRef.current = true
       if (typeof window === 'undefined') return
       const sp = new URLSearchParams(window.location.search)
       const existingIdRaw = sp.get('cartId')
@@ -343,7 +345,7 @@ export default function HomePage() {
         } catch {}
       }
     }
-    restoreCartFromQuery()
+  restoreCartFromQuery().finally(() => { isRestoringRef.current = false })
   }, [])
 
   // Polling para sincronizar cambios desde otros usuarios en el mismo cartId
@@ -370,7 +372,9 @@ export default function HomePage() {
                 .in('id', ids)
               const byId = new Map((productsData || []).map(p => [p.id, p]))
               const next = pairs.map(([pid, qty]) => ({ product: byId.get(pid) || detailsMap.get(pid), quantity: qty })).filter(i => i.product)
+              isRestoringRef.current = true
               setCartItems(next)
+              Promise.resolve().then(() => { isRestoringRef.current = false })
             } else {
               setCartItems([])
             }
@@ -386,6 +390,7 @@ export default function HomePage() {
   // Sincronizar carrito persistente al cambiar items (con debounce ligero)
   useEffect(() => {
     if (!cartId) return
+  if (isRestoringRef.current) return
     const h = setTimeout(async () => {
       try {
         const valid = cartItems.filter(ci => ci?.product?.id && ci.quantity > 0)
@@ -452,6 +457,12 @@ export default function HomePage() {
         price_raw: ci.product.price_raw,
         currency: ci.product.currency,
       }))
+      // Evitar mandar un carrito vacío si estamos restaurando
+      if (isRestoringRef.current && items.length === 0) {
+        // No sobreescribir; solo devolver el link canónico existente
+        const canonical = `${window.location.origin}/?cartId=${id}`
+        return canonical
+      }
       await fetch(`/api/cart/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items, details }) })
     } catch {}
     // URL canónica y estable sólo con cartId
