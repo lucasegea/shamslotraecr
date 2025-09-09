@@ -12,7 +12,7 @@ import { formatPrice } from '@/lib/types'
 import { logProductPriceData, getPriceToDisplay, formatPriceConsistently } from '@/lib/price-debug'
 import { toast } from '@/hooks/use-toast'
 
-export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantity, onRemoveItem, getShareLink }) {
+export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantity, onRemoveItem, getShareLink, shareButtonLabel }) {
   const totalItems = cartItems.reduce((sum, item) => sum + item.quantity, 0)
   const totalPrice = cartItems.reduce((sum, item) => {
     // Usar final_price robustamente
@@ -117,7 +117,7 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
                       }
                     }}
                   >
-                    <Share2 className="h-4 w-4 mr-2" /> Compartir carrito
+                    <Share2 className="h-4 w-4 mr-2" /> {shareButtonLabel || 'Compartir carrito'}
                   </Button>
                   <Button
                     variant="secondary"

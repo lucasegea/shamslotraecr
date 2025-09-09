@@ -17,6 +17,7 @@ import CartDrawer from '@/components/CartDrawer'
 import ImageViewer from '@/components/ImageViewer'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import Link from 'next/link'
 
 // Contexto para el visor de imágenes
 export const ImageViewerContext = createContext({
@@ -411,6 +412,7 @@ export default function HomePage() {
     const items = cartItems.filter(ci => ci?.product?.id && ci.quantity > 0).map(ci => [ci.product.id, ci.quantity])
     // Reusar siempre un cartId existente, ya sea en estado o guardado
     let id = cartIdRef.current || cartId
+    let createdNow = false
     if (!id) {
       // Intentar recuperar desde localStorage
       try { id = localStorage.getItem('sharedCartId') || null } catch {}
@@ -436,33 +438,44 @@ export default function HomePage() {
         id = uuidv4()
         setCartId(id)
         cartIdRef.current = id
+        createdNow = true
         try { localStorage.setItem('sharedCartId', id) } catch {}
       }
-      // Upsert en el backend con el id estable
-      await fetch(`/api/cart/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) })
+      // Upsert en el backend con el id estable, con snapshot mínimo
+      const details = cartItems.filter(ci => ci?.product?.id && ci.quantity > 0).map(ci => ({
+        id: ci.product.id,
+        name: ci.product.name,
+        product_url: ci.product.product_url,
+        image_url: ci.product.image_url,
+        image_file_url: ci.product.image_file_url,
+        final_price: ci.product.final_price,
+        price_raw: ci.product.price_raw,
+        currency: ci.product.currency,
+      }))
+      await fetch(`/api/cart/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items, details }) })
     } catch {}
-    const url = new URL(window.location.href)
-    if (id) {
-      url.searchParams.set('cartId', id)
-      // Añadir un snapshot redundante del carrito como fallback cross-ambiente
-      try {
-        const json = JSON.stringify(items)
-        const encoded = typeof btoa === 'function' ? btoa(json) : encodeURIComponent(json)
-        url.searchParams.set('cart', encoded)
-      } catch {}
-      window.history.replaceState({}, '', url.toString())
-      return url.toString()
-    }
+    // URL canónica y estable sólo con cartId
+    const canonical = `${window.location.origin}/?cartId=${id}`
+    try {
+      const current = new URL(window.location.href)
+      const currentId = current.searchParams.get('cartId')
+      if (createdNow || currentId !== id) {
+        current.searchParams.set('cartId', id)
+        current.searchParams.delete('cart')
+        window.history.replaceState({}, '', current.toString())
+      }
+    } catch {}
+    if (id) return canonical
     // Fallback: encoded cart in URL so el link nunca sale “común”
     try {
       const json = JSON.stringify(items)
       const encoded = typeof btoa === 'function' ? btoa(json) : encodeURIComponent(json)
-      url.searchParams.set('cart', encoded)
-      url.searchParams.delete('cartId')
-      // No es necesario modificar history aquí, devolvemos el link listo para compartir
-      return url.toString()
+      const fallback = new URL(window.location.href)
+      fallback.searchParams.set('cart', encoded)
+      fallback.searchParams.delete('cartId')
+      return fallback.toString()
     } catch {
-      return url.toString()
+      return window.location.href
     }
   }
 
@@ -526,12 +539,14 @@ export default function HomePage() {
                   <Waves className="h-8 w-8 text-blue-900" />
                 </div>
                 <div>
-                  <h1 className="text-xl md:text-2xl lg:text-3xl font-bold text-blue-900">
-                    Shams lo trae!
-                  </h1>
-                  <p className="text-sm text-muted-foreground">
-                    Los mejores precios
-                  </p>
+                  <Link href="/" className="group inline-flex flex-col focus:outline-none focus:ring-2 focus:ring-blue-300 rounded-md">
+                    <h1 className="text-xl md:text-2xl lg:text-3xl font-bold text-blue-900 group-hover:underline cursor-pointer">
+                      Shams lo trae!
+                    </h1>
+                    <p className="text-sm text-muted-foreground">
+                      Los mejores precios
+                    </p>
+                  </Link>
                 </div>
               </div>
             </div>
@@ -712,6 +727,7 @@ export default function HomePage() {
         onUpdateQuantity={handleUpdateQuantity}
         onRemoveItem={handleRemoveItem}
   getShareLink={getShareLink}
+        shareButtonLabel={cartId ? 'Guardar y compartir' : 'Compartir carrito'}
       />
     </div>
     </ImageViewerContext.Provider>
