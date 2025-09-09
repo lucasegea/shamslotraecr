@@ -41,6 +41,8 @@ export default function HomePage() {
   const cartIdRef = useRef(null)
   const creatingCartRef = useRef(null)
   const isRestoringRef = useRef(false)
+  const useSupabaseCartRef = useRef(false)
+  const revisionRef = useRef(0)
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1)
@@ -255,7 +257,7 @@ export default function HomePage() {
     setCartItems(prevItems => prevItems.filter(item => item.product.id !== productId))
   }
 
-  // Restaurar carrito desde enlace compartido (?cartId= o ?cart=)
+  // Restaurar carrito desde enlace compartido (soporta /cart/:shareId o ?cartId= o ?cart=)
   useEffect(() => {
     async function restoreCartFromQuery() {
       // 1) Restaurar snapshot local al instante si existe
@@ -275,73 +277,97 @@ export default function HomePage() {
   isRestoringRef.current = true
       if (typeof window === 'undefined') return
       const sp = new URLSearchParams(window.location.search)
-  const existingIdRaw = sp.get('cartId')
+      // Detectar ruta /cart/:shareId como canónica
+      let pathId = null
+      try {
+        const m = window.location.pathname.match(/^\/cart\/([a-f0-9\-]{6,})$/i)
+        pathId = m ? m[1] : null
+      } catch {}
+  const existingIdRaw = pathId || sp.get('cartId')
   const seedEnc = sp.get('seed')
       const existingId = existingIdRaw && existingIdRaw !== 'null' && existingIdRaw !== 'undefined' ? existingIdRaw : null
+      if (pathId) useSupabaseCartRef.current = true
       // Si hay cartId en la URL, usarlo y guardarlo para futuras sesiones
       let restored = false
       if (existingId) {
         try {
-          const res = await fetch(`/api/cart/${existingId}`, { cache: 'no-store' })
-          if (res.ok) {
-            const data = await res.json()
-            setCartId(data.id)
-            cartIdRef.current = data.id
-            try { localStorage.setItem('sharedCartId', data.id) } catch {}
-            const pairs = Array.isArray(data.items) ? data.items : []
-            const ids = pairs.map(([id]) => id)
-            const detailsMap = new Map((Array.isArray(data.details) ? data.details : []).map(d => [d.id, d]))
-            let nextItems = []
-            if (ids.length) {
-              const { data: productsData } = await supabase
-                .from('products')
-                .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
-                .in('id', ids)
-              const byId = new Map((productsData || []).map(p => [p.id, p]))
-              nextItems = pairs
-                .map(([pid, qty]) => ({ product: byId.get(pid) || detailsMap.get(pid), quantity: qty }))
-                .filter(i => i.product)
-            }
-            setCartItems(nextItems)
-            if (nextItems.length) {
-              restored = true
-              // Limpiar seed si venía en el enlace
-              if (seedEnc) {
-                try { const url = new URL(window.location.href); url.searchParams.delete('seed'); window.history.replaceState({}, '', url.toString()) } catch {}
+          if (useSupabaseCartRef.current) {
+            const res = await fetch(`/cart/${existingId}`, { cache: 'no-store' })
+            if (res.ok) {
+              const data = await res.json()
+              setCartId(existingId)
+              cartIdRef.current = existingId
+              revisionRef.current = data.revision || 0
+              try { localStorage.setItem('sharedCartId', existingId) } catch {}
+              const rows = Array.isArray(data.items) ? data.items : []
+              const ids = rows.map(r => r.product_id)
+              let byId = new Map()
+              if (ids.length) {
+                const { data: productsData } = await supabase
+                  .from('products')
+                  .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
+                  .in('id', ids)
+                byId = new Map((productsData || []).map(p => [p.id, p]))
               }
-            } else if (seedEnc) {
-              // El servidor no tiene items aún; usar la semilla del enlace para poblar
-              try {
-                const json = typeof atob === 'function' ? atob(seedEnc) : decodeURIComponent(seedEnc)
-                const seedPairs = JSON.parse(json) // [[id, qty], ...]
-                const seedIds = seedPairs.map(([id]) => id)
-                if (seedIds.length) {
-                  const { data: productsData } = await supabase
-                    .from('products')
-                    .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
-                    .in('id', seedIds)
-                  const byId = new Map((productsData || []).map(p => [p.id, p]))
-                  const seedItems = seedPairs.map(([pid, qty]) => ({ product: byId.get(pid), quantity: qty })).filter(i => i.product)
-                  setCartItems(seedItems)
-                  const items = seedItems.map(ci => [ci.product.id, ci.quantity])
-                  const details = seedItems.map(ci => ({
-                    id: ci.product.id,
-                    name: ci.product.name,
-                    product_url: ci.product.product_url,
-                    image_url: ci.product.image_url,
-                    image_file_url: ci.product.image_file_url,
-                    final_price: ci.product.final_price,
-                    price_raw: ci.product.price_raw,
-                    currency: ci.product.currency,
-                  }))
-                  if (items.length) {
-                    await fetch(`/api/cart/${data.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items, details }) })
-                    restored = true
-                    // Limpiar seed del enlace tras poblar
+              const nextItems = rows.map(r => ({ product: byId.get(r.product_id) || r.snapshot, quantity: Number(r.qty) || 1 })).filter(i => i.product)
+              setCartItems(nextItems)
+              if (nextItems.length) {
+                restored = true
+                if (seedEnc) { try { const url = new URL(window.location.href); url.searchParams.delete('seed'); window.history.replaceState({}, '', url.toString()) } catch {} }
+              } else if (seedEnc) {
+                // Sembrar en servidor una sola vez
+                try {
+                  const json = typeof atob === 'function' ? atob(seedEnc) : decodeURIComponent(seedEnc)
+                  const seedPairs = JSON.parse(json)
+                  if (Array.isArray(seedPairs) && seedPairs.length) {
+                    await fetch(`/cart/${existingId}?action=seed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seed: seedPairs }) })
+                    // Reintentar GET
+                    const again = await fetch(`/cart/${existingId}`, { cache: 'no-store' })
+                    if (again.ok) {
+                      const d2 = await again.json()
+                      revisionRef.current = d2.revision || revisionRef.current
+                      const rows2 = Array.isArray(d2.items) ? d2.items : []
+                      const ids2 = rows2.map(r => r.product_id)
+                      let byId2 = new Map()
+                      if (ids2.length) {
+                        const { data: p2 } = await supabase.from('products').select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency').in('id', ids2)
+                        byId2 = new Map((p2 || []).map(p => [p.id, p]))
+                      }
+                      const seedItems = rows2.map(r => ({ product: byId2.get(r.product_id) || r.snapshot, quantity: Number(r.qty) || 1 })).filter(i => i.product)
+                      setCartItems(seedItems)
+                      if (seedItems.length) restored = true
+                    }
                     try { const url = new URL(window.location.href); url.searchParams.delete('seed'); window.history.replaceState({}, '', url.toString()) } catch {}
                   }
-                }
-              } catch {}
+                } catch {}
+              }
+            }
+          } else {
+            const res = await fetch(`/api/cart/${existingId}`, { cache: 'no-store' })
+            if (res.ok) {
+              const data = await res.json()
+              setCartId(data.id)
+              cartIdRef.current = data.id
+              try { localStorage.setItem('sharedCartId', data.id) } catch {}
+              const pairs = Array.isArray(data.items) ? data.items : []
+              const ids = pairs.map(([id]) => id)
+              const detailsMap = new Map((Array.isArray(data.details) ? data.details : []).map(d => [d.id, d]))
+              let nextItems = []
+              if (ids.length) {
+                const { data: productsData } = await supabase
+                  .from('products')
+                  .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
+                  .in('id', ids)
+                const byId = new Map((productsData || []).map(p => [p.id, p]))
+                nextItems = pairs
+                  .map(([pid, qty]) => ({ product: byId.get(pid) || detailsMap.get(pid), quantity: qty }))
+                  .filter(i => i.product)
+              }
+              setCartItems(nextItems)
+              if (nextItems.length) {
+                restored = true
+                if (seedEnc) { try { const url = new URL(window.location.href); url.searchParams.delete('seed'); window.history.replaceState({}, '', url.toString()) } catch {} }
+              }
             }
           }
         } catch {}
@@ -351,35 +377,57 @@ export default function HomePage() {
       try { savedId = localStorage.getItem('sharedCartId') || null } catch {}
     if (!restored && savedId) {
         try {
-          const res = await fetch(`/api/cart/${savedId}`, { cache: 'no-store' })
+          const res = useSupabaseCartRef.current ? await fetch(`/cart/${savedId}`, { cache: 'no-store' }) : await fetch(`/api/cart/${savedId}`, { cache: 'no-store' })
           if (res.ok) {
             const data = await res.json()
-            setCartId(data.id)
-            cartIdRef.current = data.id
+            const idSet = useSupabaseCartRef.current ? savedId : data.id
+            setCartId(idSet)
+            cartIdRef.current = idSet
             // Asegurar que la URL también tenga el cartId restaurado
             try {
               const url = new URL(window.location.href)
-              url.searchParams.set('cartId', data.id)
+              if (useSupabaseCartRef.current) {
+                url.pathname = `/cart/${idSet}`
+              } else {
+                url.searchParams.set('cartId', idSet)
+              }
               url.searchParams.delete('cart')
               url.searchParams.delete('seed')
               window.history.replaceState({}, '', url.toString())
             } catch {}
-            const pairs = Array.isArray(data.items) ? data.items : []
-            const ids = pairs.map(([id]) => id)
-            const detailsMap = new Map((Array.isArray(data.details) ? data.details : []).map(d => [d.id, d]))
-            let nextItems = []
-            if (ids.length) {
-              const { data: productsData } = await supabase
-                .from('products')
-                .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
-                .in('id', ids)
-              const byId = new Map((productsData || []).map(p => [p.id, p]))
-              nextItems = pairs
-                .map(([pid, qty]) => ({ product: byId.get(pid) || detailsMap.get(pid), quantity: qty }))
-                .filter(i => i.product)
+            if (useSupabaseCartRef.current) {
+              revisionRef.current = data.revision || 0
+              const rows = Array.isArray(data.items) ? data.items : []
+              const ids = rows.map(r => r.product_id)
+              let byId = new Map()
+              if (ids.length) {
+                const { data: productsData } = await supabase
+                  .from('products')
+                  .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
+                  .in('id', ids)
+                byId = new Map((productsData || []).map(p => [p.id, p]))
+              }
+              const nextItems = rows.map(r => ({ product: byId.get(r.product_id) || r.snapshot, quantity: Number(r.qty) || 1 })).filter(i => i.product)
+              setCartItems(nextItems)
+              if (nextItems.length) restored = true
+            } else {
+              const pairs = Array.isArray(data.items) ? data.items : []
+              const ids = pairs.map(([id]) => id)
+              const detailsMap = new Map((Array.isArray(data.details) ? data.details : []).map(d => [d.id, d]))
+              let nextItems = []
+              if (ids.length) {
+                const { data: productsData } = await supabase
+                  .from('products')
+                  .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
+                  .in('id', ids)
+                const byId = new Map((productsData || []).map(p => [p.id, p]))
+                nextItems = pairs
+                  .map(([pid, qty]) => ({ product: byId.get(pid) || detailsMap.get(pid), quantity: qty }))
+                  .filter(i => i.product)
+              }
+              setCartItems(nextItems)
+              if (nextItems.length) restored = true
             }
-            setCartItems(nextItems)
-            if (nextItems.length) restored = true
           }
         } catch {}
       }
@@ -406,22 +454,17 @@ export default function HomePage() {
   restoreCartFromQuery().finally(async () => {
     try {
       const seed = window.__seedFromCartSnapshot
-      const id = cartIdRef.current || new URLSearchParams(window.location.search).get('cartId')
+      const id = cartIdRef.current || (typeof window !== 'undefined' ? (window.location.pathname.startsWith('/cart/') ? window.location.pathname.split('/').pop() : new URLSearchParams(window.location.search).get('cartId')) : null)
       if (Array.isArray(seed) && seed.length && id) {
         const valid = seed.filter(ci => ci?.product?.id && ci.quantity > 0)
         const items = valid.map(ci => [ci.product.id, ci.quantity])
-        const details = valid.map(ci => ({
-          id: ci.product.id,
-          name: ci.product.name,
-          product_url: ci.product.product_url,
-          image_url: ci.product.image_url,
-          image_file_url: ci.product.image_file_url,
-          final_price: ci.product.final_price,
-          price_raw: ci.product.price_raw,
-          currency: ci.product.currency,
-        }))
         if (items.length) {
-          await fetch(`/api/cart/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items, details }) })
+          if (useSupabaseCartRef.current || (typeof window !== 'undefined' && window.location.pathname.startsWith('/cart/'))) {
+            await fetch(`/cart/${id}?action=seed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seed: items }) })
+          } else {
+            const details = valid.map(ci => ({ id: ci.product.id, name: ci.product.name, product_url: ci.product.product_url, image_url: ci.product.image_url, image_file_url: ci.product.image_file_url, final_price: ci.product.final_price, price_raw: ci.product.price_raw, currency: ci.product.currency }))
+            await fetch(`/api/cart/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items, details }) })
+          }
           setCartId(id)
           cartIdRef.current = id
           try { localStorage.setItem('sharedCartId', id) } catch {}
@@ -439,28 +482,53 @@ export default function HomePage() {
     let lastUpdatedAt = null
     async function tick() {
       try {
-        const res = await fetch(`/api/cart/${cartId}`, { cache: 'no-store' })
-        if (res.ok) {
-          const data = await res.json()
-          // Si cambió updated_at, refrescar items
-          const changed = !lastUpdatedAt || (data.updated_at && data.updated_at !== lastUpdatedAt)
-          if (changed) {
-            lastUpdatedAt = data.updated_at || lastUpdatedAt
-            const pairs = Array.isArray(data.items) ? data.items : []
-            const ids = pairs.map(([id]) => id)
-            const detailsMap = new Map((Array.isArray(data.details) ? data.details : []).map(d => [d.id, d]))
-            if (ids.length) {
-              const { data: productsData } = await supabase
-                .from('products')
-                .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
-                .in('id', ids)
-              const byId = new Map((productsData || []).map(p => [p.id, p]))
-              const next = pairs.map(([pid, qty]) => ({ product: byId.get(pid) || detailsMap.get(pid), quantity: qty })).filter(i => i.product)
+        if (useSupabaseCartRef.current || (typeof window !== 'undefined' && window.location.pathname.startsWith('/cart/'))) {
+          const res = await fetch(`/cart/${cartId}`, { cache: 'no-store' })
+          if (res.ok) {
+            const data = await res.json()
+            const changed = typeof data.revision === 'number' && data.revision !== revisionRef.current
+            if (changed) {
+              revisionRef.current = data.revision
+              const rows = Array.isArray(data.items) ? data.items : []
+              const ids = rows.map(r => r.product_id)
+              let byId = new Map()
+              if (ids.length) {
+                const { data: productsData } = await supabase
+                  .from('products')
+                  .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
+                  .in('id', ids)
+                byId = new Map((productsData || []).map(p => [p.id, p]))
+              }
+              const next = rows.map(r => ({ product: byId.get(r.product_id) || r.snapshot, quantity: Number(r.qty) || 1 })).filter(i => i.product)
               isRestoringRef.current = true
               setCartItems(next)
               Promise.resolve().then(() => { isRestoringRef.current = false })
-            } else {
-              setCartItems([])
+            }
+          }
+        } else {
+          const res = await fetch(`/api/cart/${cartId}`, { cache: 'no-store' })
+          if (res.ok) {
+            const data = await res.json()
+            // Si cambió updated_at, refrescar items
+            const changed = !lastUpdatedAt || (data.updated_at && data.updated_at !== lastUpdatedAt)
+            if (changed) {
+              lastUpdatedAt = data.updated_at || lastUpdatedAt
+              const pairs = Array.isArray(data.items) ? data.items : []
+              const ids = pairs.map(([id]) => id)
+              const detailsMap = new Map((Array.isArray(data.details) ? data.details : []).map(d => [d.id, d]))
+              if (ids.length) {
+                const { data: productsData } = await supabase
+                  .from('products')
+                  .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
+                  .in('id', ids)
+                const byId = new Map((productsData || []).map(p => [p.id, p]))
+                const next = pairs.map(([pid, qty]) => ({ product: byId.get(pid) || detailsMap.get(pid), quantity: qty })).filter(i => i.product)
+                isRestoringRef.current = true
+                setCartItems(next)
+                Promise.resolve().then(() => { isRestoringRef.current = false })
+              } else {
+                setCartItems([])
+              }
             }
           }
         }
@@ -478,18 +546,56 @@ export default function HomePage() {
     const h = setTimeout(async () => {
       try {
         const valid = cartItems.filter(ci => ci?.product?.id && ci.quantity > 0)
-        const items = valid.map(ci => [ci.product.id, ci.quantity])
-        const details = valid.map(ci => ({
-          id: ci.product.id,
-          name: ci.product.name,
-          product_url: ci.product.product_url,
-          image_url: ci.product.image_url,
-          image_file_url: ci.product.image_file_url,
-          final_price: ci.product.final_price,
-          price_raw: ci.product.price_raw,
-          currency: ci.product.currency,
-        }))
-        await fetch(`/api/cart/${cartId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items, details }) })
+        if (useSupabaseCartRef.current || (typeof window !== 'undefined' && window.location.pathname.startsWith('/cart/'))) {
+          const currentMap = new Map(valid.map(ci => [ci.product.id, ci]))
+          const prev = JSON.parse(sessionStorage.getItem('prevCartItems') || '[]')
+          const prevMap = new Map(prev.map(ci => [ci.product.id, ci]))
+          const ops = []
+          for (const [pid, ci] of currentMap.entries()) {
+            ops.push({ op: 'upsert', productId: pid, qty: ci.quantity, snapshot: {
+              id: ci.product.id,
+              name: ci.product.name,
+              product_url: ci.product.product_url,
+              image_url: ci.product.image_url,
+              image_file_url: ci.product.image_file_url,
+              final_price: ci.product.final_price,
+              price_raw: ci.product.price_raw,
+              currency: ci.product.currency,
+            } })
+          }
+          for (const pid of prevMap.keys()) { if (!currentMap.has(pid)) ops.push({ op: 'remove', productId: pid }) }
+          if (ops.length) {
+            const res = await fetch(`/cart/${cartId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'If-Match': `W/"${revisionRef.current}"` }, body: JSON.stringify({ ifRevision: revisionRef.current, ops }) })
+            if (res.status === 409) {
+              const data = await res.json().catch(() => null)
+              if (data && Array.isArray(data.items)) {
+                const rows = data.items
+                const ids = rows.map(r => r.product_id)
+                let byId = new Map()
+                if (ids.length) {
+                  const { data: productsData } = await supabase
+                    .from('products')
+                    .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
+                    .in('id', ids)
+                  byId = new Map((productsData || []).map(p => [p.id, p]))
+                }
+                const next = rows.map(r => ({ product: byId.get(r.product_id) || r.snapshot, quantity: Number(r.qty) || 1 }))
+                isRestoringRef.current = true
+                setCartItems(next)
+                Promise.resolve().then(() => { isRestoringRef.current = false })
+                revisionRef.current = data.revision || revisionRef.current
+              }
+            } else if (res.ok) {
+              const out = await res.json().catch(() => null)
+              if (out && typeof out.revision === 'number') revisionRef.current = out.revision
+            }
+          }
+          try { sessionStorage.setItem('prevCartItems', JSON.stringify(valid.map(ci => ({ product: ci.product, quantity: ci.quantity })))) } catch {}
+        } else {
+          const items = valid.map(ci => [ci.product.id, ci.quantity])
+          const details = valid.map(ci => ({ id: ci.product.id, name: ci.product.name, product_url: ci.product.product_url, image_url: ci.product.image_url, image_file_url: ci.product.image_file_url, final_price: ci.product.final_price, price_raw: ci.product.price_raw, currency: ci.product.currency }))
+          await fetch(`/api/cart/${cartId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items, details }) })
+        }
       } catch {}
     }, 400)
     return () => clearTimeout(h)
@@ -530,7 +636,7 @@ export default function HomePage() {
       }
     }
     try {
-      // Si aún no hay id, generamos uno en cliente y hacemos PUT (upsert) para garantizar estabilidad
+      // Si aún no hay id, generamos uno en cliente
       if (!id) {
         id = uuidv4()
         setCartId(id)
@@ -538,40 +644,24 @@ export default function HomePage() {
         createdNow = true
         try { localStorage.setItem('sharedCartId', id) } catch {}
       }
-      // Upsert en el backend con el id estable, con snapshot mínimo
-      const details = cartItems.filter(ci => ci?.product?.id && ci.quantity > 0).map(ci => ({
-        id: ci.product.id,
-        name: ci.product.name,
-        product_url: ci.product.product_url,
-        image_url: ci.product.image_url,
-        image_file_url: ci.product.image_file_url,
-        final_price: ci.product.final_price,
-        price_raw: ci.product.price_raw,
-        currency: ci.product.currency,
-      }))
-      // Evitar mandar un carrito vacío si estamos restaurando
-      if (isRestoringRef.current && items.length === 0) {
-        // No sobreescribir; solo devolver el link canónico existente
-        const canonical = `${window.location.origin}/?cartId=${id}`
-        return canonical
-      }
-      await fetch(`/api/cart/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items, details }) })
+      // Sembrar en servidor (idempotente)
+      try {
+        if (items.length) {
+          await fetch(`/cart/${id}?action=seed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seed: items }) })
+          useSupabaseCartRef.current = true
+        }
+      } catch {}
     } catch {}
-    // Construir semilla del carrito como respaldo en el link
-    let seed = ''
-    try {
-      const json = JSON.stringify(items)
-      seed = typeof btoa === 'function' ? btoa(json) : encodeURIComponent(json)
-    } catch {}
-    // URL canónica y estable con cartId y semilla de respaldo
-    const canonical = `${window.location.origin}/?cartId=${id}${seed ? `&seed=${encodeURIComponent(seed)}` : ''}`
+    // URL canónica /cart/:id
+    const canonical = `${window.location.origin}/cart/${id}`
     try {
       const current = new URL(window.location.href)
       const currentId = current.searchParams.get('cartId')
       if (createdNow || currentId !== id) {
-        current.searchParams.set('cartId', id)
+        current.pathname = `/cart/${id}`
         current.searchParams.delete('cart')
-        if (seed) current.searchParams.set('seed', seed)
+        current.searchParams.delete('cartId')
+        current.searchParams.delete('seed')
         window.history.replaceState({}, '', current.toString())
       }
     } catch {}
@@ -581,6 +671,7 @@ export default function HomePage() {
       const json = JSON.stringify(items)
       const encoded = typeof btoa === 'function' ? btoa(json) : encodeURIComponent(json)
       const fallback = new URL(window.location.href)
+      fallback.pathname = '/'
       fallback.searchParams.set('cart', encoded)
       fallback.searchParams.delete('cartId')
       return fallback.toString()
@@ -650,13 +741,13 @@ export default function HomePage() {
                 </div>
                 <div>
                   <Link
-                    href={cartId ? `/?cartId=${cartId}` : '/'}
+                    href={cartId ? ((useSupabaseCartRef.current || (typeof window !== 'undefined' && window.location.pathname.startsWith('/cart/'))) ? `/cart/${cartId}` : `/?cartId=${cartId}`) : '/'}
                     onClick={(e) => {
                       // Forzar reload completo y conservar cartId si existe
                       e.preventDefault()
                       try {
                         const id = cartIdRef.current || cartId || (typeof window !== 'undefined' ? localStorage.getItem('sharedCartId') : null)
-                        const href = id ? `/?cartId=${id}` : '/'
+                        const href = id ? ((useSupabaseCartRef.current || (typeof window !== 'undefined' && window.location.pathname.startsWith('/cart/'))) ? `/cart/${id}` : `/?cartId=${id}`) : '/'
                         window.location.href = href
                       } catch {
                         window.location.href = '/'
