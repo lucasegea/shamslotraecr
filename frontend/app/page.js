@@ -7,6 +7,7 @@ import { Search, Waves, ShoppingCart, Filter, ChevronDown } from 'lucide-react'
 
 import { getCategories, getProducts } from '@/lib/database'
 import { supabase } from '@/lib/supabase'
+import { useIsMobile } from '@/hooks/use-mobile'
 import CategorySidebar from '@/components/CategorySidebar'
 import ProductGrid from '@/components/ProductGrid'
 import ProductPagination from '@/components/ProductPagination'
@@ -39,7 +40,8 @@ export default function HomePage() {
   const [currentPage, setCurrentPage] = useState(1)
   const [totalProducts, setTotalProducts] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
-  const productsPerPage = 12
+  const isMobile = useIsMobile()
+  const productsPerPage = isMobile ? 24 : 12
   
   // ImageViewer state
   const [imageViewerState, setImageViewerState] = useState({
