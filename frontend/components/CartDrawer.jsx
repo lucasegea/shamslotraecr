@@ -12,7 +12,7 @@ import { formatPrice } from '@/lib/types'
 import { logProductPriceData, getPriceToDisplay, formatPriceConsistently } from '@/lib/price-debug'
 import { toast } from '@/hooks/use-toast'
 
-export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantity, onRemoveItem }) {
+export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantity, onRemoveItem, getShareLink }) {
   const totalItems = cartItems.reduce((sum, item) => sum + item.quantity, 0)
   const totalPrice = cartItems.reduce((sum, item) => {
     // Usar final_price robustamente
@@ -109,7 +109,7 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
                     className="flex-1"
                     onClick={async () => {
                       try {
-                        const link = buildCartShareLink()
+                        const link = getShareLink ? await getShareLink() : buildCartShareLink()
                         await navigator.clipboard.writeText(link)
                         toast({ title: 'Link copiado', description: 'Se copió el link del carrito para compartir.' })
                       } catch (e) {
@@ -122,8 +122,8 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
                   <Button
                     variant="secondary"
                     className="flex-1 bg-[#25D366] hover:bg-[#1fb457] text-white"
-                    onClick={() => {
-                      const link = buildCartShareLink()
+                    onClick={async () => {
+                      const link = getShareLink ? await getShareLink() : buildCartShareLink()
                       const msg = `Mira mi carrito en Shams lo trae!: ${link}`
                       const wa = `https://wa.me/?text=${encodeURIComponent(msg)}`
                       if (typeof window !== 'undefined') window.open(wa, '_blank')

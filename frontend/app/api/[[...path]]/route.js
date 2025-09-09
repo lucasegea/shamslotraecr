@@ -47,7 +47,7 @@ async function handleRoute(request, { params }) {
       return handleCORS(NextResponse.json({ message: "Hello World" }))
     }
 
-    // Status endpoints - POST /api/status
+  // Status endpoints - POST /api/status
     if (route === '/status' && method === 'POST') {
       const body = await request.json()
       
@@ -66,6 +66,45 @@ async function handleRoute(request, { params }) {
 
       await db.collection('status_checks').insertOne(statusObj)
       return handleCORS(NextResponse.json(statusObj))
+    }
+
+    // Cart endpoints
+    // POST /api/cart -> create a new shared cart
+    if (route === '/cart' && method === 'POST') {
+      const body = await request.json()
+      const items = Array.isArray(body?.items) ? body.items : [] // [[id, qty], ...]
+      const cart = {
+        id: uuidv4(),
+        items,
+        created_at: new Date(),
+        updated_at: new Date(),
+      }
+      await db.collection('carts').insertOne(cart)
+      return handleCORS(NextResponse.json({ id: cart.id }))
+    }
+
+    // GET /api/cart/:id -> fetch cart
+    if (route.startsWith('/cart/') && method === 'GET') {
+      const id = route.split('/')[2]
+      if (!id) return handleCORS(NextResponse.json({ error: 'Missing id' }, { status: 400 }))
+      const cart = await db.collection('carts').findOne({ id })
+      if (!cart) return handleCORS(NextResponse.json({ error: 'Not found' }, { status: 404 }))
+      const { _id, ...clean } = cart
+      return handleCORS(NextResponse.json(clean))
+    }
+
+    // PUT /api/cart/:id -> update existing cart
+    if (route.startsWith('/cart/') && method === 'PUT') {
+      const id = route.split('/')[2]
+      const body = await request.json()
+      const items = Array.isArray(body?.items) ? body.items : []
+      if (!id) return handleCORS(NextResponse.json({ error: 'Missing id' }, { status: 400 }))
+      await db.collection('carts').updateOne(
+        { id },
+        { $set: { items, updated_at: new Date() } },
+        { upsert: true }
+      )
+      return handleCORS(NextResponse.json({ id }))
     }
 
     // Status endpoints - GET /api/status

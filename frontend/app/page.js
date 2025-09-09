@@ -35,6 +35,7 @@ export default function HomePage() {
   const [cartItems, setCartItems] = useState([])
   const [isCartOpen, setIsCartOpen] = useState(false)
   const [isCartBouncing, setIsCartBouncing] = useState(false)
+  const [cartId, setCartId] = useState(null)
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1)
@@ -249,41 +250,90 @@ export default function HomePage() {
     setCartItems(prevItems => prevItems.filter(item => item.product.id !== productId))
   }
 
-  // Restaurar carrito desde enlace compartido (?cart=)
+  // Restaurar carrito desde enlace compartido (?cartId= o ?cart=)
   useEffect(() => {
     async function restoreCartFromQuery() {
       if (typeof window === 'undefined') return
-      const enc = new URLSearchParams(window.location.search).get('cart')
-      if (!enc) return
-      try {
-        const json = typeof atob === 'function' ? atob(enc) : decodeURIComponent(enc)
-        const pairs = JSON.parse(json) // [[id, qty], ...]
-        const ids = pairs.map(([id]) => id)
-        if (!ids.length) return
-        const { data, error } = await supabase
-          .from('products')
-          .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
-          .in('id', ids)
-        if (error) return
-        const byId = new Map((data || []).map(p => [p.id, p]))
-        setCartItems(prev => {
-          const next = [...prev]
-          for (const [id, qty] of pairs) {
-            const p = byId.get(id)
-            if (!p) continue
-            const existing = next.find(i => i.product.id === id)
-            if (existing) {
-              existing.quantity = qty
-            } else {
-              next.push({ product: p, quantity: qty })
+      const sp = new URLSearchParams(window.location.search)
+      const existingId = sp.get('cartId')
+      if (existingId) {
+        try {
+          const res = await fetch(`/api/cart/${existingId}`, { cache: 'no-store' })
+          if (res.ok) {
+            const data = await res.json()
+            setCartId(data.id)
+            const pairs = Array.isArray(data.items) ? data.items : []
+            const ids = pairs.map(([id]) => id)
+            if (ids.length) {
+              const { data: productsData } = await supabase
+                .from('products')
+                .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
+                .in('id', ids)
+              const byId = new Map((productsData || []).map(p => [p.id, p]))
+              setCartItems(pairs
+                .map(([pid, qty]) => ({ product: byId.get(pid), quantity: qty }))
+                .filter(i => i.product)
+              )
             }
           }
-          return next
-        })
-      } catch {}
+        } catch {}
+        return
+      }
+      const enc = sp.get('cart')
+      if (enc) {
+        try {
+          const json = typeof atob === 'function' ? atob(enc) : decodeURIComponent(enc)
+          const pairs = JSON.parse(json) // [[id, qty], ...]
+          const ids = pairs.map(([id]) => id)
+          if (!ids.length) return
+          const { data, error } = await supabase
+            .from('products')
+            .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
+            .in('id', ids)
+          if (error) return
+          const byId = new Map((data || []).map(p => [p.id, p]))
+          setCartItems(pairs.map(([pid, qty]) => ({ product: byId.get(pid), quantity: qty })).filter(i => i.product))
+        } catch {}
+      }
     }
     restoreCartFromQuery()
   }, [])
+
+  // Sincronizar carrito persistente al cambiar items (con debounce ligero)
+  useEffect(() => {
+    if (!cartId) return
+    const h = setTimeout(async () => {
+      try {
+        const items = cartItems.filter(ci => ci?.product?.id && ci.quantity > 0).map(ci => [ci.product.id, ci.quantity])
+        await fetch(`/api/cart/${cartId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) })
+      } catch {}
+    }, 400)
+    return () => clearTimeout(h)
+  }, [cartItems, cartId])
+
+  // Proveer un generador de link persistente para compartir
+  const getShareLink = async () => {
+    if (typeof window === 'undefined') return ''
+    const items = cartItems.filter(ci => ci?.product?.id && ci.quantity > 0).map(ci => [ci.product.id, ci.quantity])
+    let id = cartId
+    try {
+      if (!id) {
+        const res = await fetch('/api/cart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) })
+        if (res.ok) {
+          const data = await res.json()
+          id = data.id
+          setCartId(id)
+        }
+      } else {
+        await fetch(`/api/cart/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) })
+      }
+    } catch {}
+    const url = new URL(window.location.href)
+    url.searchParams.set('cartId', id)
+    url.searchParams.delete('cart')
+    window.history.replaceState({}, '', url.toString())
+    return url.toString()
+  }
 
   const filteredProductsCount = useMemo(() => {
     return totalProducts
@@ -530,6 +580,7 @@ export default function HomePage() {
         cartItems={cartItems}
         onUpdateQuantity={handleUpdateQuantity}
         onRemoveItem={handleRemoveItem}
+  getShareLink={getShareLink}
       />
     </div>
     </ImageViewerContext.Provider>
