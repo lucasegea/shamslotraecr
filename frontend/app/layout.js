@@ -1,6 +1,7 @@
 import './globals.css'
 import { cn } from '@/lib/utils'
 import Link from 'next/link';
+import { Toaster } from '@/components/ui/toaster'
 
 export const metadata = {
   title: 'Shams lo trae! - Los mejores productos al mejor precio',
@@ -46,6 +47,7 @@ export default function RootLayout({ children }) {
           <div className="flex-1">
             {children}
           </div>
+          <Toaster />
         </div>
       </body>
     </html>

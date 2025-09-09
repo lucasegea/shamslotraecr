@@ -249,6 +249,42 @@ export default function HomePage() {
     setCartItems(prevItems => prevItems.filter(item => item.product.id !== productId))
   }
 
+  // Restaurar carrito desde enlace compartido (?cart=)
+  useEffect(() => {
+    async function restoreCartFromQuery() {
+      if (typeof window === 'undefined') return
+      const enc = new URLSearchParams(window.location.search).get('cart')
+      if (!enc) return
+      try {
+        const json = typeof atob === 'function' ? atob(enc) : decodeURIComponent(enc)
+        const pairs = JSON.parse(json) // [[id, qty], ...]
+        const ids = pairs.map(([id]) => id)
+        if (!ids.length) return
+        const { data, error } = await supabase
+          .from('products')
+          .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
+          .in('id', ids)
+        if (error) return
+        const byId = new Map((data || []).map(p => [p.id, p]))
+        setCartItems(prev => {
+          const next = [...prev]
+          for (const [id, qty] of pairs) {
+            const p = byId.get(id)
+            if (!p) continue
+            const existing = next.find(i => i.product.id === id)
+            if (existing) {
+              existing.quantity = qty
+            } else {
+              next.push({ product: p, quantity: qty })
+            }
+          }
+          return next
+        })
+      } catch {}
+    }
+    restoreCartFromQuery()
+  }, [])
+
   const filteredProductsCount = useMemo(() => {
     return totalProducts
   }, [totalProducts])

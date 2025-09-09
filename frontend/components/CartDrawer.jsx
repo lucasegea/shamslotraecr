@@ -1,14 +1,16 @@
+
 'use client'
 
 import { useState } from 'react'
 import Image from 'next/image'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, ShoppingCart, Plus, Minus, Trash2, ImageIcon } from 'lucide-react'
+import { X, ShoppingCart, Plus, Minus, Trash2, ImageIcon, Share2, MessageCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { formatPrice } from '@/lib/types'
 import { logProductPriceData, getPriceToDisplay, formatPriceConsistently } from '@/lib/price-debug'
+import { toast } from '@/hooks/use-toast'
 
 export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantity, onRemoveItem }) {
   const totalItems = cartItems.reduce((sum, item) => sum + item.quantity, 0)
@@ -17,6 +19,21 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
     const unit = getPriceToDisplay(item.product);
     return sum + unit * item.quantity
   }, 0)
+
+  function buildCartShareLink() {
+    if (typeof window === 'undefined') return ''
+    // Compact payload: [[id,qty], ...]
+    const pairs = cartItems
+      .filter(ci => ci?.product?.id && ci.quantity > 0)
+      .map(ci => [ci.product.id, ci.quantity])
+    const json = JSON.stringify(pairs)
+    // json uses only ascii characters (digits, brackets, commas), safe for btoa
+    const encoded = typeof btoa === 'function' ? btoa(json) : encodeURIComponent(json)
+    const url = new URL(window.location.href)
+    url.searchParams.set('cart', encoded)
+    // Keep only cart param to make it shorter (optional): stay with full URL to preserve filters
+    return url.toString()
+  }
 
   return (
     <AnimatePresence>
@@ -86,6 +103,35 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
                 <Button className="w-full bg-blue-600 hover:bg-blue-700 text-white" size="lg">
                   Proceder al Checkout
                 </Button>
+                <div className="flex items-center gap-3">
+                  <Button
+                    variant="outline"
+                    className="flex-1"
+                    onClick={async () => {
+                      try {
+                        const link = buildCartShareLink()
+                        await navigator.clipboard.writeText(link)
+                        toast({ title: 'Link copiado', description: 'Se copió el link del carrito para compartir.' })
+                      } catch (e) {
+                        toast({ title: 'No se pudo copiar', description: 'Intenta nuevamente o comparte manualmente.', variant: 'destructive' })
+                      }
+                    }}
+                  >
+                    <Share2 className="h-4 w-4 mr-2" /> Compartir carrito
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    className="flex-1 bg-[#25D366] hover:bg-[#1fb457] text-white"
+                    onClick={() => {
+                      const link = buildCartShareLink()
+                      const msg = `Mira mi carrito en Shams lo trae!: ${link}`
+                      const wa = `https://wa.me/?text=${encodeURIComponent(msg)}`
+                      if (typeof window !== 'undefined') window.open(wa, '_blank')
+                    }}
+                  >
+                    <MessageCircle className="h-4 w-4 mr-2" /> WhatsApp
+                  </Button>
+                </div>
                 <p className="text-xs text-gray-500 text-center">
                   Los precios pueden variar. Verifica en el sitio original antes de comprar.
                 </p>
