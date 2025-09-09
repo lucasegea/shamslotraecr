@@ -61,9 +61,10 @@ export async function POST(req, { params }) {
       const byId = new Map((prods || []).map(p => [p.id, p]))
       snapshots = seed.map(([pid, qty]) => ({ cart_id: cart.id, product_id: pid, qty, snapshot: byId.get(pid) || null }))
     }
-    const { error: insErr } = await db.from('cart_items').upsert(snapshots, { onConflict: 'cart_id,product_id' })
+    // Use insert for seed to avoid depending on a unique constraint during first write
+    const { error: insErr } = await db.from('cart_items').insert(snapshots)
     if (insErr) throw insErr
-    const { error: upErr } = await db.from('carts').update({ updated_at: new Date().toISOString() }).eq('id', cart.id)
+  const { error: upErr } = await db.from('carts').update({ updated_at: new Date().toISOString(), revision: (cart.revision || 0) + 1 }).eq('id', cart.id)
     if (upErr) throw upErr
     return new NextResponse(null, { status: 204 })
   } catch (e) {
@@ -91,15 +92,21 @@ export async function PATCH(req, { params }) {
       if (op.op === 'upsert') {
         if (!op.productId || !(op.qty > 0)) continue
         const row = { cart_id: cart.id, product_id: op.productId, qty: op.qty, snapshot: op.snapshot || null }
-        const { error } = await db.from('cart_items').upsert(row, { onConflict: 'cart_id,product_id' })
-        if (error) throw error
+        // Try upsert using (cart_id,product_id). If the table lacks a unique constraint, fallback to delete+insert
+        const tryUpsert = await db.from('cart_items').upsert(row, { onConflict: 'cart_id,product_id' })
+        if (tryUpsert.error) {
+          // Fallback: delete then insert
+          await db.from('cart_items').delete().eq('cart_id', cart.id).eq('product_id', op.productId)
+          const { error: ins2 } = await db.from('cart_items').insert(row)
+          if (ins2) throw ins2
+        }
       } else if (op.op === 'remove') {
         if (!op.productId) continue
         const { error } = await db.from('cart_items').delete().eq('cart_id', cart.id).eq('product_id', op.productId)
         if (error) throw error
       }
     }
-    const { error: upErr } = await db.from('carts').update({ updated_at: new Date().toISOString() }).eq('id', cart.id)
+  const { error: upErr } = await db.from('carts').update({ updated_at: new Date().toISOString(), revision: currentRev + 1 }).eq('id', cart.id)
     if (upErr) throw upErr
     const { data: updatedCart } = await db.from('carts').select('*').eq('id', cart.id).single()
     const { data: items } = await db.from('cart_items').select('*').eq('cart_id', cart.id)

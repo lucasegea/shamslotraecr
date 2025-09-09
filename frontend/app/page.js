@@ -257,6 +257,35 @@ export default function HomePage() {
     setCartItems(prevItems => prevItems.filter(item => item.product.id !== productId))
   }
 
+  // Auto-crear y sembrar carrito en Supabase al tener items por primera vez
+  useEffect(() => {
+    if (!cartItems || cartItems.length === 0) return
+    if (cartIdRef.current || cartId) return
+    if (creatingCartRef.current) return
+    creatingCartRef.current = true
+    ;(async () => {
+      try {
+        const id = uuidv4()
+        setCartId(id)
+        cartIdRef.current = id
+        useSupabaseCartRef.current = true
+        try { localStorage.setItem('sharedCartId', id) } catch {}
+        const pairs = cartItems
+          .filter(ci => ci?.product?.id && ci.quantity > 0)
+          .map(ci => [ci.product.id, ci.quantity])
+        if (pairs.length) {
+          await fetch(`/api/cart/${id}?action=seed`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ seed: pairs })
+          }).catch(() => {})
+        }
+      } finally {
+        creatingCartRef.current = false
+      }
+    })()
+  }, [cartItems])
+
   // Restaurar carrito desde enlace compartido (soporta /cart/:shareId o ?cartId= o ?cart=)
   useEffect(() => {
     async function restoreCartFromQuery() {
