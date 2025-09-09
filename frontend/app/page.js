@@ -258,6 +258,20 @@ export default function HomePage() {
   // Restaurar carrito desde enlace compartido (?cartId= o ?cart=)
   useEffect(() => {
     async function restoreCartFromQuery() {
+      // 1) Restaurar snapshot local al instante si existe
+      try {
+        const snapshot = localStorage.getItem('cartSnapshot')
+        if (snapshot) {
+          const arr = JSON.parse(snapshot) // [{product:{...}, quantity}, ...]
+          if (Array.isArray(arr) && arr.length) {
+            isRestoringRef.current = true
+            setCartItems(arr)
+            // liberar bandera al siguiente tick
+            Promise.resolve().then(() => { isRestoringRef.current = false })
+          }
+        }
+      } catch {}
+
   isRestoringRef.current = true
       if (typeof window === 'undefined') return
       const sp = new URLSearchParams(window.location.search)
@@ -341,11 +355,40 @@ export default function HomePage() {
             .in('id', ids)
           if (error) return
           const byId = new Map((data || []).map(p => [p.id, p]))
-          setCartItems(pairs.map(([pid, qty]) => ({ product: byId.get(pid), quantity: qty })).filter(i => i.product))
+          const next = pairs.map(([pid, qty]) => ({ product: byId.get(pid), quantity: qty })).filter(i => i.product)
+          setCartItems(next)
+          // Marcar que debemos sembrar el servidor con este contenido si luego tenemos cartId
+          window.__seedFromCartSnapshot = next
         } catch {}
       }
     }
-  restoreCartFromQuery().finally(() => { isRestoringRef.current = false })
+  restoreCartFromQuery().finally(async () => {
+    try {
+      const seed = window.__seedFromCartSnapshot
+      const id = cartIdRef.current || new URLSearchParams(window.location.search).get('cartId')
+      if (Array.isArray(seed) && seed.length && id) {
+        const valid = seed.filter(ci => ci?.product?.id && ci.quantity > 0)
+        const items = valid.map(ci => [ci.product.id, ci.quantity])
+        const details = valid.map(ci => ({
+          id: ci.product.id,
+          name: ci.product.name,
+          product_url: ci.product.product_url,
+          image_url: ci.product.image_url,
+          image_file_url: ci.product.image_file_url,
+          final_price: ci.product.final_price,
+          price_raw: ci.product.price_raw,
+          currency: ci.product.currency,
+        }))
+        if (items.length) {
+          await fetch(`/api/cart/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items, details }) })
+          setCartId(id)
+          cartIdRef.current = id
+          try { localStorage.setItem('sharedCartId', id) } catch {}
+        }
+      }
+    } catch {}
+    isRestoringRef.current = false
+  })
   }, [])
 
   // Polling para sincronizar cambios desde otros usuarios en el mismo cartId
@@ -410,6 +453,14 @@ export default function HomePage() {
     }, 400)
     return () => clearTimeout(h)
   }, [cartItems, cartId])
+
+  // Guardar snapshot local del carrito ante cualquier cambio (para sobrevivir reload / relogueo)
+  useEffect(() => {
+    try {
+      const payload = cartItems.map(ci => ({ product: ci.product, quantity: ci.quantity }))
+      localStorage.setItem('cartSnapshot', JSON.stringify(payload))
+    } catch {}
+  }, [cartItems])
 
   // Proveer un generador de link persistente para compartir
   const getShareLink = async () => {
@@ -550,7 +601,21 @@ export default function HomePage() {
                   <Waves className="h-8 w-8 text-blue-900" />
                 </div>
                 <div>
-                  <Link href="/" className="group inline-flex flex-col focus:outline-none focus:ring-2 focus:ring-blue-300 rounded-md">
+                  <Link
+                    href={cartId ? `/?cartId=${cartId}` : '/'}
+                    onClick={(e) => {
+                      // Forzar reload completo y conservar cartId si existe
+                      e.preventDefault()
+                      try {
+                        const id = cartIdRef.current || cartId || (typeof window !== 'undefined' ? localStorage.getItem('sharedCartId') : null)
+                        const href = id ? `/?cartId=${id}` : '/'
+                        window.location.href = href
+                      } catch {
+                        window.location.href = '/'
+                      }
+                    }}
+                    className="group inline-flex flex-col focus:outline-none focus:ring-2 focus:ring-blue-300 rounded-md"
+                  >
                     <h1 className="text-xl md:text-2xl lg:text-3xl font-bold text-blue-900 group-hover:underline cursor-pointer">
                       Shams lo trae!
                     </h1>
