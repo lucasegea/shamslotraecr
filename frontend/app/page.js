@@ -261,6 +261,7 @@ export default function HomePage() {
       const existingIdRaw = sp.get('cartId')
       const existingId = existingIdRaw && existingIdRaw !== 'null' && existingIdRaw !== 'undefined' ? existingIdRaw : null
       // Si hay cartId en la URL, usarlo y guardarlo para futuras sesiones
+      let restored = false
       if (existingId) {
         try {
           const res = await fetch(`/api/cart/${existingId}`, { cache: 'no-store' })
@@ -271,25 +272,27 @@ export default function HomePage() {
             try { localStorage.setItem('sharedCartId', data.id) } catch {}
             const pairs = Array.isArray(data.items) ? data.items : []
             const ids = pairs.map(([id]) => id)
+            const detailsMap = new Map((Array.isArray(data.details) ? data.details : []).map(d => [d.id, d]))
+            let nextItems = []
             if (ids.length) {
               const { data: productsData } = await supabase
                 .from('products')
                 .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
                 .in('id', ids)
               const byId = new Map((productsData || []).map(p => [p.id, p]))
-              setCartItems(pairs
-                .map(([pid, qty]) => ({ product: byId.get(pid), quantity: qty }))
+              nextItems = pairs
+                .map(([pid, qty]) => ({ product: byId.get(pid) || detailsMap.get(pid), quantity: qty }))
                 .filter(i => i.product)
-              )
             }
+            setCartItems(nextItems)
+            if (nextItems.length) restored = true
           }
         } catch {}
-        return
       }
       // Si no hay cartId en la URL, intentar restaurar desde localStorage
       let savedId = null
       try { savedId = localStorage.getItem('sharedCartId') || null } catch {}
-      if (savedId) {
+    if (!restored && savedId) {
         try {
           const res = await fetch(`/api/cart/${savedId}`, { cache: 'no-store' })
           if (res.ok) {
@@ -305,22 +308,25 @@ export default function HomePage() {
             } catch {}
             const pairs = Array.isArray(data.items) ? data.items : []
             const ids = pairs.map(([id]) => id)
+            const detailsMap = new Map((Array.isArray(data.details) ? data.details : []).map(d => [d.id, d]))
+            let nextItems = []
             if (ids.length) {
               const { data: productsData } = await supabase
                 .from('products')
                 .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
                 .in('id', ids)
               const byId = new Map((productsData || []).map(p => [p.id, p]))
-              setCartItems(pairs
-                .map(([pid, qty]) => ({ product: byId.get(pid), quantity: qty }))
+              nextItems = pairs
+                .map(([pid, qty]) => ({ product: byId.get(pid) || detailsMap.get(pid), quantity: qty }))
                 .filter(i => i.product)
-              )
             }
+            setCartItems(nextItems)
+            if (nextItems.length) restored = true
           }
         } catch {}
       }
   const enc = sp.get('cart')
-      if (enc) {
+    if (!restored && enc) {
         try {
           const json = typeof atob === 'function' ? atob(enc) : decodeURIComponent(enc)
           const pairs = JSON.parse(json) // [[id, qty], ...]
@@ -355,13 +361,14 @@ export default function HomePage() {
             lastUpdatedAt = data.updated_at || lastUpdatedAt
             const pairs = Array.isArray(data.items) ? data.items : []
             const ids = pairs.map(([id]) => id)
+            const detailsMap = new Map((Array.isArray(data.details) ? data.details : []).map(d => [d.id, d]))
             if (ids.length) {
               const { data: productsData } = await supabase
                 .from('products')
                 .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
                 .in('id', ids)
               const byId = new Map((productsData || []).map(p => [p.id, p]))
-              const next = pairs.map(([pid, qty]) => ({ product: byId.get(pid), quantity: qty })).filter(i => i.product)
+              const next = pairs.map(([pid, qty]) => ({ product: byId.get(pid) || detailsMap.get(pid), quantity: qty })).filter(i => i.product)
               setCartItems(next)
             } else {
               setCartItems([])
@@ -380,8 +387,19 @@ export default function HomePage() {
     if (!cartId) return
     const h = setTimeout(async () => {
       try {
-        const items = cartItems.filter(ci => ci?.product?.id && ci.quantity > 0).map(ci => [ci.product.id, ci.quantity])
-        await fetch(`/api/cart/${cartId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) })
+        const valid = cartItems.filter(ci => ci?.product?.id && ci.quantity > 0)
+        const items = valid.map(ci => [ci.product.id, ci.quantity])
+        const details = valid.map(ci => ({
+          id: ci.product.id,
+          name: ci.product.name,
+          product_url: ci.product.product_url,
+          image_url: ci.product.image_url,
+          image_file_url: ci.product.image_file_url,
+          final_price: ci.product.final_price,
+          price_raw: ci.product.price_raw,
+          currency: ci.product.currency,
+        }))
+        await fetch(`/api/cart/${cartId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items, details }) })
       } catch {}
     }, 400)
     return () => clearTimeout(h)
@@ -426,7 +444,12 @@ export default function HomePage() {
     const url = new URL(window.location.href)
     if (id) {
       url.searchParams.set('cartId', id)
-      url.searchParams.delete('cart')
+      // Añadir un snapshot redundante del carrito como fallback cross-ambiente
+      try {
+        const json = JSON.stringify(items)
+        const encoded = typeof btoa === 'function' ? btoa(json) : encodeURIComponent(json)
+        url.searchParams.set('cart', encoded)
+      } catch {}
       window.history.replaceState({}, '', url.toString())
       return url.toString()
     }

@@ -96,13 +96,14 @@ async function handleRoute(request, { params }) {
     // PUT /api/cart/:id -> create or update existing cart (idempotent)
     if (route.startsWith('/cart/') && method === 'PUT') {
       const id = route.split('/')[2]
-      const body = await request.json()
-      const items = Array.isArray(body?.items) ? body.items : []
+    const body = await request.json()
+    const items = Array.isArray(body?.items) ? body.items : []
+    const details = Array.isArray(body?.details) ? body.details : []
       if (!id) return handleCORS(NextResponse.json({ error: 'Missing id' }, { status: 400 }))
       await db.collection('carts').updateOne(
         { id },
         {
-          $set: { items, updated_at: new Date() },
+      $set: { items, details, updated_at: new Date() },
           $setOnInsert: { id, created_at: new Date() }
         },
         { upsert: true }
