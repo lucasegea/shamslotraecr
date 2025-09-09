@@ -1,6 +1,7 @@
+
 'use client'
 
-import { useState, useEffect, useMemo, createContext } from 'react'
+import { useState, useEffect, useMemo, useRef, createContext } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Search, Waves, ShoppingCart, Filter, ChevronDown } from 'lucide-react'
 
@@ -46,6 +47,9 @@ export default function HomePage() {
     imageUrl: '',
     alt: ''
   })
+  
+  // Ref for mobile categories <details>
+  const mobileCategoriesRef = useRef(null)
   
   // Función para abrir el visor de imágenes
   const openImageViewer = (imageUrl, alt) => {
@@ -391,7 +395,7 @@ export default function HomePage() {
           >
             {/* Mobile filters */}
             <div className="lg:hidden">
-              <details className="group rounded-xl border border-blue-200 bg-white/90 shadow-sm px-4 py-3">
+              <details ref={mobileCategoriesRef} className="group rounded-xl border border-blue-200 bg-white/90 shadow-sm px-4 py-3">
                 <summary className="list-none cursor-pointer select-none flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Filter className="h-4 w-4 text-blue-600" />
@@ -405,7 +409,12 @@ export default function HomePage() {
                   <CategorySidebar
                     categories={categories}
                     selectedCategory={selectedCategory}
-                    onCategorySelect={handleCategorySelect}
+                    onCategorySelect={(cat) => {
+                      handleCategorySelect(cat)
+                      if (mobileCategoriesRef.current) {
+                        mobileCategoriesRef.current.open = false
+                      }
+                    }}
                     isMobile={true}
                   />
                 </div>
