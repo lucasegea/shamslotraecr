@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin'
 
+// Ensure Node.js runtime (required for service role key usage) and disable caching
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
 const notFound = () => new NextResponse('Not found', { status: 404 })
 const badRequest = (msg='Bad request') => new NextResponse(msg, { status: 400 })
 const conflict = (body) => new NextResponse(JSON.stringify(body || {}), { status: 409, headers: { 'Content-Type': 'application/json' } })
@@ -18,7 +22,7 @@ async function ensureCart(db, shareId) {
 
 export async function GET(_req, { params }) {
   const db = getSupabaseAdmin()
-  if (!db) return badRequest('Missing SUPABASE service credentials')
+  if (!db) return badRequest('Missing SUPABASE service credentials (set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)')
   const shareId = params?.shareId
   if (!shareId) return badRequest('Missing shareId')
   const { data: cart, error } = await db.from('carts').select('*').eq('share_id', shareId).maybeSingle()
@@ -39,7 +43,7 @@ export async function POST(req, { params }) {
   const shareId = params?.shareId
   if (action !== 'seed') return badRequest('Use PATCH for updates or add ?action=seed')
   const db = getSupabaseAdmin()
-  if (!db) return badRequest('Missing SUPABASE service credentials')
+  if (!db) return badRequest('Missing SUPABASE service credentials (set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)')
   const body = await req.json().catch(() => ({}))
   const seed = Array.isArray(body?.seed) ? body.seed : []
   if (!shareId) return badRequest('Missing shareId')
@@ -70,7 +74,7 @@ export async function POST(req, { params }) {
 // PATCH /api/cart/:shareId
 export async function PATCH(req, { params }) {
   const db = getSupabaseAdmin()
-  if (!db) return badRequest('Missing SUPABASE service credentials')
+  if (!db) return badRequest('Missing SUPABASE service credentials (set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)')
   const shareId = params?.shareId
   if (!shareId) return badRequest('Missing shareId')
   const body = await req.json().catch(() => null)

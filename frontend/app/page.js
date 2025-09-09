@@ -339,7 +339,26 @@ export default function HomePage() {
                     }
                     try { const url = new URL(window.location.href); url.searchParams.delete('seed'); window.history.replaceState({}, '', url.toString()) } catch {}
                   }
-                } catch {}
+                } catch {
+                  // Fallback: si la siembra en servidor falla, al menos poblar el carrito localmente con el seed
+                  try {
+                    const json = typeof atob === 'function' ? atob(seedEnc) : decodeURIComponent(seedEnc)
+                    const seedPairs = JSON.parse(json)
+                    if (Array.isArray(seedPairs) && seedPairs.length) {
+                      const ids3 = seedPairs.map(([pid]) => pid)
+                      const { data: p3 } = await supabase
+                        .from('products')
+                        .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
+                        .in('id', ids3)
+                      const byId3 = new Map((p3 || []).map(p => [p.id, p]))
+                      const nextLocal = seedPairs.map(([pid, qty]) => ({ product: byId3.get(pid), quantity: Number(qty) || 1 })).filter(i => i.product)
+                      if (nextLocal.length) {
+                        setCartItems(nextLocal)
+                        window.__seedFromCartSnapshot = nextLocal
+                      }
+                    }
+                  } catch {}
+                }
               }
             }
           } else {
@@ -613,6 +632,12 @@ export default function HomePage() {
   const getShareLink = async () => {
     if (typeof window === 'undefined') return ''
     const items = cartItems.filter(ci => ci?.product?.id && ci.quantity > 0).map(ci => [ci.product.id, ci.quantity])
+    // Pre-encode seed for robust fallback
+    let encodedSeed = ''
+    try {
+      const json = JSON.stringify(items)
+      encodedSeed = typeof btoa === 'function' ? btoa(json) : encodeURIComponent(json)
+    } catch {}
     // Reusar siempre un cartId existente, ya sea en estado o guardado
     let id = cartIdRef.current || cartId
     let createdNow = false
@@ -644,16 +669,21 @@ export default function HomePage() {
         createdNow = true
         try { localStorage.setItem('sharedCartId', id) } catch {}
       }
-      // Sembrar en servidor (idempotente)
+      // Sembrar en servidor (idempotente). Si falla, usaremos ?seed= en el link.
+      let seedOk = true
       try {
         if (items.length) {
-          await fetch(`/cart/${id}?action=seed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seed: items }) })
-          useSupabaseCartRef.current = true
+          const res = await fetch(`/api/cart/${id}?action=seed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seed: items }) })
+          seedOk = res.ok || res.status === 204
+          if (seedOk) useSupabaseCartRef.current = true
         }
-      } catch {}
+      } catch {
+        seedOk = false
+      }
     } catch {}
     // URL canónica /cart/:id
-    const canonical = `${window.location.origin}/cart/${id}`
+  const canonical = `${window.location.origin}/cart/${id}`
+  const canonicalWithSeed = encodedSeed ? `${canonical}?seed=${encodedSeed}` : canonical
     try {
       const current = new URL(window.location.href)
       const currentId = current.searchParams.get('cartId')
@@ -661,11 +691,14 @@ export default function HomePage() {
         current.pathname = `/cart/${id}`
         current.searchParams.delete('cart')
         current.searchParams.delete('cartId')
-        current.searchParams.delete('seed')
+        // Solo mantener seed si no pudimos sembrar en servidor
+        if (encodedSeed) {
+          try { current.searchParams.delete('seed') } catch {}
+        }
         window.history.replaceState({}, '', current.toString())
       }
     } catch {}
-    if (id) return canonical
+  if (id) return (encodedSeed ? canonicalWithSeed : canonical)
     // Fallback: encoded cart in URL so el link nunca sale “común”
     try {
       const json = JSON.stringify(items)
