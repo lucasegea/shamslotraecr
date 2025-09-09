@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, createContext } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Search, Waves, ShoppingCart } from 'lucide-react'
+import { Search, Waves, ShoppingCart, Filter, ChevronDown } from 'lucide-react'
 
 import { getCategories, getProducts } from '@/lib/database'
 import { supabase } from '@/lib/supabase'
@@ -391,12 +391,17 @@ export default function HomePage() {
           >
             {/* Mobile filters */}
             <div className="lg:hidden">
-              <details className="group rounded-xl border border-transparent bg-transparent p-0">
+              <details className="group rounded-xl border border-blue-200 bg-white/90 shadow-sm px-4 py-3">
                 <summary className="list-none cursor-pointer select-none flex items-center justify-between">
-                  <span className="font-medium">Categorías</span>
-                  <span className="text-sm text-muted-foreground">toca para abrir</span>
+                  <div className="flex items-center gap-2">
+                    <Filter className="h-4 w-4 text-blue-600" />
+                    <span className="font-semibold text-gray-900">Categorías</span>
+                    <span className="text-xs text-muted-foreground group-open:hidden">(toca para abrir)</span>
+                    <span className="text-xs text-muted-foreground hidden group-open:inline">(toca para cerrar)</span>
+                  </div>
+                  <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform duration-200 group-open:rotate-180" />
                 </summary>
-                <div className="pt-2">
+                <div className="pt-3">
                   <CategorySidebar
                     categories={categories}
                     selectedCategory={selectedCategory}
