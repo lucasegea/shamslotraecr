@@ -275,7 +275,8 @@ export default function HomePage() {
   isRestoringRef.current = true
       if (typeof window === 'undefined') return
       const sp = new URLSearchParams(window.location.search)
-      const existingIdRaw = sp.get('cartId')
+  const existingIdRaw = sp.get('cartId')
+  const seedEnc = sp.get('seed')
       const existingId = existingIdRaw && existingIdRaw !== 'null' && existingIdRaw !== 'undefined' ? existingIdRaw : null
       // Si hay cartId en la URL, usarlo y guardarlo para futuras sesiones
       let restored = false
@@ -302,7 +303,46 @@ export default function HomePage() {
                 .filter(i => i.product)
             }
             setCartItems(nextItems)
-            if (nextItems.length) restored = true
+            if (nextItems.length) {
+              restored = true
+              // Limpiar seed si venía en el enlace
+              if (seedEnc) {
+                try { const url = new URL(window.location.href); url.searchParams.delete('seed'); window.history.replaceState({}, '', url.toString()) } catch {}
+              }
+            } else if (seedEnc) {
+              // El servidor no tiene items aún; usar la semilla del enlace para poblar
+              try {
+                const json = typeof atob === 'function' ? atob(seedEnc) : decodeURIComponent(seedEnc)
+                const seedPairs = JSON.parse(json) // [[id, qty], ...]
+                const seedIds = seedPairs.map(([id]) => id)
+                if (seedIds.length) {
+                  const { data: productsData } = await supabase
+                    .from('products')
+                    .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
+                    .in('id', seedIds)
+                  const byId = new Map((productsData || []).map(p => [p.id, p]))
+                  const seedItems = seedPairs.map(([pid, qty]) => ({ product: byId.get(pid), quantity: qty })).filter(i => i.product)
+                  setCartItems(seedItems)
+                  const items = seedItems.map(ci => [ci.product.id, ci.quantity])
+                  const details = seedItems.map(ci => ({
+                    id: ci.product.id,
+                    name: ci.product.name,
+                    product_url: ci.product.product_url,
+                    image_url: ci.product.image_url,
+                    image_file_url: ci.product.image_file_url,
+                    final_price: ci.product.final_price,
+                    price_raw: ci.product.price_raw,
+                    currency: ci.product.currency,
+                  }))
+                  if (items.length) {
+                    await fetch(`/api/cart/${data.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items, details }) })
+                    restored = true
+                    // Limpiar seed del enlace tras poblar
+                    try { const url = new URL(window.location.href); url.searchParams.delete('seed'); window.history.replaceState({}, '', url.toString()) } catch {}
+                  }
+                }
+              } catch {}
+            }
           }
         } catch {}
       }
@@ -321,6 +361,7 @@ export default function HomePage() {
               const url = new URL(window.location.href)
               url.searchParams.set('cartId', data.id)
               url.searchParams.delete('cart')
+              url.searchParams.delete('seed')
               window.history.replaceState({}, '', url.toString())
             } catch {}
             const pairs = Array.isArray(data.items) ? data.items : []
@@ -516,14 +557,21 @@ export default function HomePage() {
       }
       await fetch(`/api/cart/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items, details }) })
     } catch {}
-    // URL canónica y estable sólo con cartId
-    const canonical = `${window.location.origin}/?cartId=${id}`
+    // Construir semilla del carrito como respaldo en el link
+    let seed = ''
+    try {
+      const json = JSON.stringify(items)
+      seed = typeof btoa === 'function' ? btoa(json) : encodeURIComponent(json)
+    } catch {}
+    // URL canónica y estable con cartId y semilla de respaldo
+    const canonical = `${window.location.origin}/?cartId=${id}${seed ? `&seed=${encodeURIComponent(seed)}` : ''}`
     try {
       const current = new URL(window.location.href)
       const currentId = current.searchParams.get('cartId')
       if (createdNow || currentId !== id) {
         current.searchParams.set('cartId', id)
         current.searchParams.delete('cart')
+        if (seed) current.searchParams.set('seed', seed)
         window.history.replaceState({}, '', current.toString())
       }
     } catch {}
