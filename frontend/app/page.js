@@ -43,6 +43,8 @@ export default function HomePage() {
   const isRestoringRef = useRef(false)
   const useSupabaseCartRef = useRef(false)
   const revisionRef = useRef(0)
+  // Modo: guardar sólo al compartir (sin auto-sync que mueva la UI)
+  const SAVE_ONLY_ON_SHARE = true
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1)
@@ -257,8 +259,9 @@ export default function HomePage() {
     setCartItems(prevItems => prevItems.filter(item => item.product.id !== productId))
   }
 
-  // Auto-crear y sembrar carrito en Supabase al tener items por primera vez
+  // Auto-crear y sembrar carrito: desactivado si sólo se guarda al compartir
   useEffect(() => {
+    if (SAVE_ONLY_ON_SHARE) return
     if (!cartItems || cartItems.length === 0) return
     if (cartIdRef.current || cartId) return
     if (creatingCartRef.current) return
@@ -292,7 +295,7 @@ export default function HomePage() {
         creatingCartRef.current = false
       }
     })()
-  }, [cartItems])
+  }, [cartItems, SAVE_ONLY_ON_SHARE])
 
   // Restaurar carrito desde enlace compartido (soporta /cart/:shareId o ?cartId= o ?cart=)
   useEffect(() => {
@@ -531,8 +534,9 @@ export default function HomePage() {
   })
   }, [])
 
-  // Polling para sincronizar cambios desde otros usuarios en el mismo cartId
+  // Polling desactivado cuando sólo se guarda al compartir para evitar movimientos visuales
   useEffect(() => {
+    if (SAVE_ONLY_ON_SHARE) return
     if (!cartId) return
     let stop = false
     let lastUpdatedAt = null
@@ -561,44 +565,19 @@ export default function HomePage() {
               Promise.resolve().then(() => { isRestoringRef.current = false })
             }
           }
-        } else {
-          const res = await fetch(`/api/cart/${cartId}`, { cache: 'no-store' })
-          if (res.ok) {
-            const data = await res.json()
-            // Si cambió updated_at, refrescar items
-            const changed = !lastUpdatedAt || (data.updated_at && data.updated_at !== lastUpdatedAt)
-            if (changed) {
-              lastUpdatedAt = data.updated_at || lastUpdatedAt
-              const pairs = Array.isArray(data.items) ? data.items : []
-              const ids = pairs.map(([id]) => id)
-              const detailsMap = new Map((Array.isArray(data.details) ? data.details : []).map(d => [d.id, d]))
-              if (ids.length) {
-                const { data: productsData } = await supabase
-                  .from('products')
-                  .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
-                  .in('id', ids)
-                const byId = new Map((productsData || []).map(p => [p.id, p]))
-                const next = pairs.map(([pid, qty]) => ({ product: byId.get(pid) || detailsMap.get(pid), quantity: qty })).filter(i => i.product)
-                isRestoringRef.current = true
-                setCartItems(next)
-                Promise.resolve().then(() => { isRestoringRef.current = false })
-              } else {
-                setCartItems([])
-              }
-            }
-          }
         }
       } catch {}
       if (!stop) setTimeout(tick, 10000)
     }
     const t = setTimeout(tick, 5000)
     return () => { stop = true; clearTimeout(t) }
-  }, [cartId])
+  }, [cartId, SAVE_ONLY_ON_SHARE])
 
-  // Sincronizar carrito persistente al cambiar items (con debounce ligero)
+  // Sincronización desactivada: sólo se guarda al compartir para evitar saltos visuales
   useEffect(() => {
+    if (SAVE_ONLY_ON_SHARE) return
     if (!cartId) return
-  if (isRestoringRef.current) return
+    if (isRestoringRef.current) return
     const h = setTimeout(async () => {
       try {
         const valid = cartItems.filter(ci => ci?.product?.id && ci.quantity > 0)
@@ -623,7 +602,6 @@ export default function HomePage() {
           if (ops.length) {
             const res = await fetch(`/api/cart/${cartId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'If-Match': `W/"${revisionRef.current}"` }, body: JSON.stringify({ ifRevision: revisionRef.current, ops }) })
             if (res.status === 409) {
-              // On conflict: update local revision and retry once with the same ops, without overriding local items
               const data = await res.json().catch(() => null)
               const newRev = data && typeof data.revision === 'number' ? data.revision : null
               if (typeof newRev === 'number') {
@@ -640,15 +618,11 @@ export default function HomePage() {
             }
           }
           try { sessionStorage.setItem('prevCartItems', JSON.stringify(valid.map(ci => ({ product: ci.product, quantity: ci.quantity })))) } catch {}
-        } else {
-          const items = valid.map(ci => [ci.product.id, ci.quantity])
-          const details = valid.map(ci => ({ id: ci.product.id, name: ci.product.name, product_url: ci.product.product_url, image_url: ci.product.image_url, image_file_url: ci.product.image_file_url, final_price: ci.product.final_price, price_raw: ci.product.price_raw, currency: ci.product.currency }))
-          await fetch(`/api/cart/${cartId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items, details }) })
         }
       } catch {}
     }, 400)
     return () => clearTimeout(h)
-  }, [cartItems, cartId])
+  }, [cartItems, cartId, SAVE_ONLY_ON_SHARE])
 
   // Guardar snapshot local del carrito ante cualquier cambio (para sobrevivir reload / relogueo)
   useEffect(() => {
@@ -668,10 +642,15 @@ export default function HomePage() {
       const json = JSON.stringify(items)
       encodedSeed = typeof btoa === 'function' ? btoa(json) : encodeURIComponent(json)
     } catch {}
-    // Reusar siempre un cartId existente, ya sea en estado o guardado
+    // Reusar siempre un cartId existente, ya sea en ruta, estado o guardado
     let id = cartIdRef.current || cartId
     let createdNow = false
     if (!id) {
+      // Preferir el shareId de la ruta /cart/:id si existe
+      try {
+        const m = window.location.pathname.match(/^\/cart\/([a-f0-9\-]{6,})$/i)
+        if (m) id = m[1]
+      } catch {}
       // Intentar recuperar desde localStorage
       try { id = localStorage.getItem('sharedCartId') || null } catch {}
       // Intentar recuperar desde la URL actual si aún no hay id
@@ -712,8 +691,8 @@ export default function HomePage() {
       }
     } catch {}
     // URL canónica /cart/:id
-  const canonical = `${window.location.origin}/cart/${id}`
-  const canonicalWithSeed = encodedSeed ? `${canonical}?seed=${encodedSeed}` : canonical
+    const canonical = `${window.location.origin}/cart/${id}`
+    const canonicalWithSeed = encodedSeed ? `${canonical}?seed=${encodedSeed}` : canonical
     try {
       const current = new URL(window.location.href)
       const currentId = current.searchParams.get('cartId')
@@ -721,14 +700,12 @@ export default function HomePage() {
         current.pathname = `/cart/${id}`
         current.searchParams.delete('cart')
         current.searchParams.delete('cartId')
-        // Solo mantener seed si no pudimos sembrar en servidor
-        if (encodedSeed) {
-          try { current.searchParams.delete('seed') } catch {}
-        }
+        // Mantener seed sólo si la siembra en servidor falló
+        try { if (!seedOk) current.searchParams.set('seed', encodedSeed); else current.searchParams.delete('seed') } catch {}
         window.history.replaceState({}, '', current.toString())
       }
     } catch {}
-  if (id) return (encodedSeed ? canonicalWithSeed : canonical)
+    if (id) return (seedOk ? canonical : canonicalWithSeed)
     // Fallback: encoded cart in URL so el link nunca sale “común”
     try {
       const json = JSON.stringify(items)
