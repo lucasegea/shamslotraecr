@@ -847,7 +847,7 @@ export default function HomePage() {
         
         {/* Hero Header */}
         <motion.header 
-          className="sticky top-0 z-40 bg-transparent"
+          className="sticky top-0 z-40 bg-background/90 supports-[backdrop-filter]:bg-background/60 backdrop-blur border-b border-blue-100/50"
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6 }}

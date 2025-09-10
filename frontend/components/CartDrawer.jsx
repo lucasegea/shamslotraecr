@@ -36,6 +36,96 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
     return url.toString()
   }
 
+  function handleClearCart() {
+    try {
+      // Vaciar items localmente (no toca la DB)
+      const ids = Array.from(new Set((cartItems || []).map(ci => ci?.product?.id).filter(Boolean)))
+      ids.forEach(id => {
+        try { onRemoveItem && onRemoveItem(id) } catch {}
+      })
+      // Forzar nuevo link para el próximo carrito
+      if (typeof window !== 'undefined') {
+        try { localStorage.removeItem('sharedCartId') } catch {}
+        try {
+          const url = new URL(window.location.href)
+          // Volver a home si estamos en /cart/:id
+          if (/^\/cart\//.test(url.pathname)) url.pathname = '/'
+          url.searchParams.delete('cart')
+          url.searchParams.delete('cartId')
+          url.searchParams.delete('seed')
+          window.history.replaceState({}, '', url.toString())
+        } catch {}
+      }
+      toast({ title: 'Carrito vaciado', description: 'Se vació localmente. El link anterior permanece guardado.' })
+    } catch {}
+  }
+
+  async function handleWhatsAppClick() {
+    if (typeof window === 'undefined') return
+    // 1) Obtener/crear un shareId estable inmediatamente
+    let shareId = null
+    try {
+      const m = window.location.pathname.match(/^\/cart\/([a-f0-9\-]{6,})$/i)
+      shareId = m ? m[1] : null
+    } catch {}
+    if (!shareId) {
+      try { shareId = localStorage.getItem('sharedCartId') || null } catch {}
+    }
+    if (!shareId) {
+      try {
+        const url = new URL(window.location.href)
+        const v = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(36).slice(2) + '-' + Date.now()
+        shareId = v
+        url.pathname = `/cart/${shareId}`
+        url.searchParams.delete('cart')
+        url.searchParams.delete('cartId')
+        url.searchParams.delete('seed')
+        window.history.replaceState({}, '', url.toString())
+        try { localStorage.setItem('sharedCartId', shareId) } catch {}
+      } catch {}
+    }
+    const link = `${window.location.origin}/cart/${shareId}`
+    // 2) Abrir WhatsApp inmediatamente (sin await para no ser bloqueado)
+    const msisdn = '5491162802566' // sin '+' según docs de wa.me
+    const msg = `Hola! Quiero finalizar la compra con este carrito: ${link}`
+    const wa = `https://wa.me/${msisdn}?text=${encodeURIComponent(msg)}`
+    try { window.open(wa, '_blank', 'noopener,noreferrer') } catch {}
+    // 3) Guardar el carrito en background con ese mismo id
+    try {
+      const pairs = cartItems.filter(ci => ci?.product?.id && ci.quantity > 0).map(ci => [ci.product.id, ci.quantity])
+      const totalQty = cartItems.reduce((s, i) => s + (Number(i.quantity) || 0), 0)
+      if (pairs.length) {
+        await fetch(`/api/cart/${shareId}?action=seed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seed: pairs, totalQty }) })
+        let serverItems = []
+        let rev = 0
+        try {
+          const res = await fetch(`/api/cart/${shareId}`, { cache: 'no-store' })
+          if (res.ok) {
+            const d = await res.json()
+            serverItems = Array.isArray(d.items) ? d.items : []
+            rev = typeof d.revision === 'number' ? d.revision : 0
+          }
+        } catch {}
+        const serverSet = new Set(serverItems.map(r => r.product_id))
+        const localMap = new Map(pairs.map(([pid, qty]) => [pid, qty]))
+        const ops = []
+        for (const [pid, qty] of localMap.entries()) {
+          ops.push({ op: 'upsert', productId: pid, qty, snapshot: null })
+        }
+        for (const pid of serverSet.values()) {
+          if (!localMap.has(pid)) ops.push({ op: 'remove', productId: pid })
+        }
+        if (ops.length) {
+          const r = await fetch(`/api/cart/${shareId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'If-Match': `W/"${rev}"` }, body: JSON.stringify({ ifRevision: rev, ops }) })
+          if (r.status === 409) {
+            const data = await r.json().catch(() => null)
+            const newRev = data && typeof data.revision === 'number' ? data.revision : rev
+            await fetch(`/api/cart/${shareId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'If-Match': `W/"${newRev}"` }, body: JSON.stringify({ ifRevision: newRev, ops }) }).catch(() => {})
+          }
+        }
+      }
+    } catch {}
+  }
   async function handleShareClick() {
     try {
       if (typeof window === 'undefined') return
@@ -193,7 +283,9 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
 
             {/* Footer */}
             {cartItems.length > 0 && (
-              <div className="border-t border-gray-200 p-6 space-y-4">
+              <div className="relative border-t border-gray-200 p-6 space-y-4 bg-white shadow-[0_-6px_12px_rgba(0,0,0,0.06)]">
+                {/* Desvanecido superior para que el contenido no se vea superpuesto al scrollear */}
+                <div className="pointer-events-none absolute inset-x-0 -top-6 h-6 bg-gradient-to-t from-white to-transparent" />
                 <div className="flex items-center justify-between text-lg font-semibold">
                   <span className="text-gray-900">Total:</span>
                   <span className="text-blue-600">{formatPriceConsistently(totalPrice)}</span>
@@ -209,24 +301,24 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
                     {copied && (
                       <span className="text-xs text-green-600">Copiado ✓</span>
                     )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="ml-auto text-red-600 hover:bg-red-50"
+                      onClick={handleClearCart}
+                      title="Vaciar carrito (local)"
+                    >
+                      <Trash2 className="h-4 w-4 mr-1" /> Vaciar carrito
+                    </Button>
                   </div>
                   <Button
                     className="w-full bg-[#25D366] hover:bg-[#1fb457] text-white"
                     size="lg"
-                    onClick={async () => {
-                      const link = getShareLink ? await getShareLink() : buildCartShareLink()
-                      const msisdn = '+5491162802566'
-                      const msg = `Hola! Quiero finalizar la compra con este carrito: ${link}`
-                      const wa = `https://wa.me/${encodeURIComponent(msisdn)}?text=${encodeURIComponent(msg)}`
-                      if (typeof window !== 'undefined') window.open(wa, '_blank')
-                    }}
+                    onClick={handleWhatsAppClick}
                   >
                     <MessageCircle className="h-4 w-4 mr-2" /> Finalizar compra por WhatsApp
                   </Button>
                 </div>
-                <p className="text-xs text-gray-500 text-center">
-                  Los precios pueden variar. Verifica en el sitio original antes de comprar.
-                </p>
               </div>
             )}
           </motion.div>
