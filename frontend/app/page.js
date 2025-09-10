@@ -274,11 +274,19 @@ export default function HomePage() {
           .filter(ci => ci?.product?.id && ci.quantity > 0)
           .map(ci => [ci.product.id, ci.quantity])
         if (pairs.length) {
-          await fetch(`/api/cart/${id}?action=seed`, {
+          const seedRes = await fetch(`/api/cart/${id}?action=seed`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ seed: pairs })
-          }).catch(() => {})
+          }).catch(() => null)
+          // Try to read current revision after seed (avoid 409 on first PATCH)
+          try {
+            const gr = await fetch(`/api/cart/${id}`, { cache: 'no-store' })
+            if (gr.ok) {
+              const d = await gr.json()
+              if (typeof d.revision === 'number') revisionRef.current = d.revision
+            }
+          } catch {}
         }
       } finally {
         creatingCartRef.current = false
@@ -615,23 +623,16 @@ export default function HomePage() {
           if (ops.length) {
             const res = await fetch(`/api/cart/${cartId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'If-Match': `W/"${revisionRef.current}"` }, body: JSON.stringify({ ifRevision: revisionRef.current, ops }) })
             if (res.status === 409) {
+              // On conflict: update local revision and retry once with the same ops, without overriding local items
               const data = await res.json().catch(() => null)
-              if (data && Array.isArray(data.items)) {
-                const rows = data.items
-                const ids = rows.map(r => r.product_id)
-                let byId = new Map()
-                if (ids.length) {
-                  const { data: productsData } = await supabase
-                    .from('products')
-                    .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
-                    .in('id', ids)
-                  byId = new Map((productsData || []).map(p => [p.id, p]))
+              const newRev = data && typeof data.revision === 'number' ? data.revision : null
+              if (typeof newRev === 'number') {
+                revisionRef.current = newRev
+                const retry = await fetch(`/api/cart/${cartId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'If-Match': `W/"${revisionRef.current}"` }, body: JSON.stringify({ ifRevision: revisionRef.current, ops }) })
+                if (retry.ok) {
+                  const out2 = await retry.json().catch(() => null)
+                  if (out2 && typeof out2.revision === 'number') revisionRef.current = out2.revision
                 }
-                const next = rows.map(r => ({ product: byId.get(r.product_id) || r.snapshot, quantity: Number(r.qty) || 1 }))
-                isRestoringRef.current = true
-                setCartItems(next)
-                Promise.resolve().then(() => { isRestoringRef.current = false })
-                revisionRef.current = data.revision || revisionRef.current
               }
             } else if (res.ok) {
               const out = await res.json().catch(() => null)

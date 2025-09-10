@@ -3,7 +3,9 @@
 import * as React from "react"
 
 const TOAST_LIMIT = 1
-const TOAST_REMOVE_DELAY = 1000000
+// Auto-dismiss timing
+const TOAST_AUTO_DISMISS = 3500 // ms before starting dismissal animation
+const TOAST_REMOVE_DELAY = 4000 // ms to fully remove after dismiss
 
 const actionTypes = {
   ADD_TOAST: "ADD_TOAST",
@@ -124,6 +126,11 @@ function toast({
       },
     },
   })
+
+  // Schedule auto-dismiss
+  setTimeout(() => {
+    try { dismiss() } catch {}
+  }, TOAST_AUTO_DISMISS)
 
   return {
     id: id,

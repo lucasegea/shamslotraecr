@@ -13,6 +13,7 @@ import { logProductPriceData, getPriceToDisplay, formatPriceConsistently } from 
 import { toast } from '@/hooks/use-toast'
 
 export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantity, onRemoveItem, getShareLink, shareButtonLabel }) {
+  const [copied, setCopied] = useState(false)
   const totalItems = cartItems.reduce((sum, item) => sum + item.quantity, 0)
   const totalPrice = cartItems.reduce((sum, item) => {
     // Usar final_price robustamente
@@ -100,36 +101,53 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
                   <span className="text-gray-900">Total:</span>
                   <span className="text-blue-600">{formatPriceConsistently(totalPrice)}</span>
                 </div>
-                <Button className="w-full bg-blue-600 hover:bg-blue-700 text-white" size="lg">
-                  Proceder al Checkout
-                </Button>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={async () => {
+                        try {
+                          const link = getShareLink ? await getShareLink() : buildCartShareLink()
+                          // Clipboard API with fallback
+                          try {
+                            await navigator.clipboard.writeText(link)
+                          } catch {
+                            const ta = document.createElement('textarea')
+                            ta.value = link
+                            ta.style.position = 'fixed'
+                            ta.style.left = '-9999px'
+                            document.body.appendChild(ta)
+                            ta.focus()
+                            ta.select()
+                            document.execCommand('copy')
+                            document.body.removeChild(ta)
+                          }
+                          setCopied(true)
+                          setTimeout(() => setCopied(false), 1500)
+                          toast({ title: 'Link copiado', description: 'El enlace del carrito se copió al portapapeles.' })
+                        } catch (e) {
+                          toast({ title: 'No se pudo copiar', description: 'Intenta nuevamente o comparte manualmente.', variant: 'destructive' })
+                        }
+                      }}
+                    >
+                      <Share2 className="h-4 w-4 mr-2" /> {shareButtonLabel || 'Guardar y compartir'}
+                    </Button>
+                    {copied && (
+                      <span className="text-xs text-green-600">Copiado ✓</span>
+                    )}
+                  </div>
                   <Button
-                    variant="outline"
-                    className="flex-1"
-                    onClick={async () => {
-                      try {
-                        const link = getShareLink ? await getShareLink() : buildCartShareLink()
-                        await navigator.clipboard.writeText(link)
-                        toast({ title: 'Link copiado', description: 'Se copió el link del carrito para compartir.' })
-                      } catch (e) {
-                        toast({ title: 'No se pudo copiar', description: 'Intenta nuevamente o comparte manualmente.', variant: 'destructive' })
-                      }
-                    }}
-                  >
-                    <Share2 className="h-4 w-4 mr-2" /> {shareButtonLabel || 'Compartir carrito'}
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    className="flex-1 bg-[#25D366] hover:bg-[#1fb457] text-white"
+                    className="w-full bg-[#25D366] hover:bg-[#1fb457] text-white"
+                    size="lg"
                     onClick={async () => {
                       const link = getShareLink ? await getShareLink() : buildCartShareLink()
-                      const msg = `Mira mi carrito en Shams lo trae!: ${link}`
-                      const wa = `https://wa.me/?text=${encodeURIComponent(msg)}`
+                      const msisdn = '+5491162802566'
+                      const msg = `Hola! Quiero finalizar la compra con este carrito: ${link}`
+                      const wa = `https://wa.me/${encodeURIComponent(msisdn)}?text=${encodeURIComponent(msg)}`
                       if (typeof window !== 'undefined') window.open(wa, '_blank')
                     }}
                   >
-                    <MessageCircle className="h-4 w-4 mr-2" /> WhatsApp
+                    <MessageCircle className="h-4 w-4 mr-2" /> Finalizar compra por WhatsApp
                   </Button>
                 </div>
                 <p className="text-xs text-gray-500 text-center">
