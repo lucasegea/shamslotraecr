@@ -573,6 +573,45 @@ export default function HomePage() {
     return () => { stop = true; clearTimeout(t) }
   }, [cartId, SAVE_ONLY_ON_SHARE])
 
+  // Realtime: cuando estamos en /cart/:id, escuchar cambios en cart_items del mismo cart y refrescar sin mover scroll
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const m = window.location.pathname.match(/^\/cart\/([a-f0-9\-]{6,})$/i)
+    const pathId = m ? m[1] : null
+    if (!pathId) return
+    let channel = null
+    try {
+      channel = supabase.channel(`cart-${pathId}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'cart_items', filter: `cart_id=eq.${pathId}` }, async (_payload) => {
+          try {
+            const res = await fetch(`/api/cart/${pathId}`, { cache: 'no-store' })
+            if (res.ok) {
+              const data = await res.json()
+              revisionRef.current = data.revision || revisionRef.current
+              const rows = Array.isArray(data.items) ? data.items : []
+              const ids = rows.map(r => r.product_id)
+              let byId = new Map()
+              if (ids.length) {
+                const { data: productsData } = await supabase
+                  .from('products')
+                  .select('id, name, product_url, image_url, image_file_url, price_raw, final_price, currency')
+                  .in('id', ids)
+                byId = new Map((productsData || []).map(p => [p.id, p]))
+              }
+              const next = rows.map(r => ({ product: byId.get(r.product_id) || r.snapshot, quantity: Number(r.qty) || 1 })).filter(i => i.product)
+              isRestoringRef.current = true
+              setCartItems(next)
+              Promise.resolve().then(() => { isRestoringRef.current = false })
+            }
+          } catch {}
+        })
+        .subscribe()
+    } catch {}
+    return () => {
+      try { if (channel) supabase.removeChannel(channel) } catch {}
+    }
+  }, [])
+
   // Sincronización desactivada: sólo se guarda al compartir para evitar saltos visuales
   useEffect(() => {
     if (SAVE_ONLY_ON_SHARE) return
