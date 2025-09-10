@@ -5,6 +5,7 @@ import { useState } from 'react'
 import Image from 'next/image'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, ShoppingCart, Plus, Minus, Trash2, ImageIcon, Share2, MessageCircle } from 'lucide-react'
+import { v4 as uuidv4 } from 'uuid'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
@@ -105,38 +106,95 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
                   <div className="flex items-center gap-2">
                     <Button
                       variant="outline"
-                      onClick={async () => {
-                        let link = ''
+                      onClick={() => {
+                        // 1) Definir el link a copiar de forma inmediata
+                        let id = null
                         try {
-                          const totalQty = cartItems.reduce((s, i) => s + (Number(i.quantity) || 0), 0)
-                          link = getShareLink ? await getShareLink() : buildCartShareLink()
-                          // Nota: la sincronización y cantidad ya se resuelven dentro de getShareLink()
-                          // Clipboard API with fallback
+                          const m = window.location.pathname.match(/^\/cart\/([a-f0-9\-]{6,})$/i)
+                          id = m ? m[1] : null
+                        } catch {}
+                        if (!id) {
+                          try { id = localStorage.getItem('sharedCartId') || null } catch {}
+                        }
+                        if (!id) id = uuidv4()
+                        const link = id ? `${window.location.origin}/cart/${id}` : window.location.href
+
+                        // 2) Copiar YA (clipboard con fallbacks)
+                        let copiedOk = false
+                        try {
+                          if (navigator?.clipboard?.writeText) {
+                            navigator.clipboard.writeText(link).then(() => {}).catch(() => {})
+                            copiedOk = true
+                          }
+                        } catch {}
+                        if (!copiedOk) {
                           try {
-                            await navigator.clipboard.writeText(link)
-                          } catch {
                             const ta = document.createElement('textarea')
                             ta.value = link
                             ta.style.position = 'fixed'
                             ta.style.left = '-9999px'
                             document.body.appendChild(ta)
-                            ta.focus()
-                            ta.select()
-                            document.execCommand('copy')
+                            ta.focus(); ta.select()
+                            try { document.execCommand('copy'); copiedOk = true } catch {}
                             document.body.removeChild(ta)
-                          }
-                          setCopied(true)
-                          setTimeout(() => setCopied(false), 1500)
-                          toast({ title: 'Link copiado', description: 'El enlace del carrito se copió al portapapeles.' })
-                        } catch (e) {
+                          } catch {}
+                        }
+                        if (!copiedOk) {
+                          try { window.prompt('Copia este enlace', link) } catch {}
+                        }
+                        setCopied(true)
+                        setTimeout(() => setCopied(false), 1500)
+                        toast({ title: 'Link copiado', description: 'El enlace del carrito se copió al portapapeles.' })
+
+                        // 3) Guardar en la base con el MISMO id, en segundo plano
+                        ;(async () => {
                           try {
-                            // Último recurso: mostrar un prompt nativo con el link para copiar manualmente
-                            if (link) {
-                              window.prompt('Copia este enlace:', link)
+                            let rev = 0
+                            try {
+                              const res = await fetch(`/api/cart/${id}`, { cache: 'no-store' })
+                              if (res.ok) {
+                                const d = await res.json()
+                                if (typeof d.revision === 'number') rev = d.revision
+                              }
+                            } catch {}
+                            const ops = (cartItems || [])
+                              .filter(ci => ci?.product?.id && ci.quantity > 0)
+                              .map(ci => ({
+                                op: 'upsert',
+                                productId: ci.product.id,
+                                qty: ci.quantity,
+                                snapshot: {
+                                  id: ci.product.id,
+                                  name: ci.product.name,
+                                  product_url: ci.product.product_url,
+                                  image_url: ci.product.image_url,
+                                  image_file_url: ci.product.image_file_url,
+                                  final_price: ci.product.final_price,
+                                  price_raw: ci.product.price_raw,
+                                  currency: ci.product.currency,
+                                }
+                              }))
+                            if (ops.length) {
+                              let r = await fetch(`/api/cart/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'If-Match': `W/"${rev}"` }, body: JSON.stringify({ ifRevision: rev, ops }) })
+                              if (r.status === 409) {
+                                const data = await r.json().catch(() => null)
+                                const newRev = data && typeof data.revision === 'number' ? data.revision : rev
+                                await fetch(`/api/cart/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'If-Match': `W/"${newRev}"` }, body: JSON.stringify({ ifRevision: newRev, ops }) }).catch(() => {})
+                              }
                             }
                           } catch {}
-                          toast({ title: 'No se pudo copiar', description: 'Intenta nuevamente o comparte manualmente.', variant: 'destructive' })
-                        }
+                        })()
+
+                        // 4) Actualizar la URL canónica después de copiar
+                        try {
+                          const current = new URL(window.location.href)
+                          current.pathname = `/cart/${id}`
+                          current.searchParams.delete('cart')
+                          current.searchParams.delete('cartId')
+                          current.searchParams.delete('seed')
+                          window.history.replaceState({}, '', current.toString())
+                          try { localStorage.setItem('sharedCartId', id) } catch {}
+                        } catch {}
                       }}
                     >
                       <Share2 className="h-4 w-4 mr-2" /> {shareButtonLabel || 'Guardar y compartir'}
