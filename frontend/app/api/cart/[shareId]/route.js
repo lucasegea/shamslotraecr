@@ -46,12 +46,25 @@ export async function POST(req, { params }) {
   if (!db) return badRequest('Missing SUPABASE service credentials (set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)')
   const body = await req.json().catch(() => ({}))
   const seed = Array.isArray(body?.seed) ? body.seed : []
+  const providedQty = Number(body?.totalQty)
+  const computedFromSeed = seed.reduce((s, [, q]) => s + (Number(q) || 0), 0)
+  const now = new Date().toISOString()
   if (!shareId) return badRequest('Missing shareId')
   try {
     const cart = await ensureCart(db, shareId)
     const { count, error: cErr } = await db.from('cart_items').select('*', { count: 'exact', head: true }).eq('cart_id', cart.id)
     if (cErr) throw cErr
+    // If cart already has items or seed is empty, still update quantity_items if provided/derivable and exit
     if ((count || 0) > 0 || seed.length === 0) {
+      try {
+        // Determine quantity to set: prefer provided, else compute from DB
+        let qtyToSet = Number.isFinite(providedQty) ? providedQty : (computedFromSeed || null)
+        if (!Number.isFinite(qtyToSet)) {
+          const { data: rows } = await db.from('cart_items').select('qty').eq('cart_id', cart.id)
+          qtyToSet = (rows || []).reduce((s, r) => s + (Number(r.qty) || 0), 0)
+        }
+        await db.from('carts').update({ updated_at: now, quantity_items: qtyToSet }).eq('id', cart.id)
+      } catch {}
       return new NextResponse(null, { status: 204 })
     }
     const ids = seed.map(([pid]) => pid)
@@ -62,9 +75,10 @@ export async function POST(req, { params }) {
       snapshots = seed.map(([pid, qty]) => ({ cart_id: cart.id, product_id: pid, qty, snapshot: byId.get(pid) || null }))
     }
     // Use insert for seed to avoid depending on a unique constraint during first write
-    const { error: insErr } = await db.from('cart_items').insert(snapshots)
+  const { error: insErr } = await db.from('cart_items').insert(snapshots)
     if (insErr) throw insErr
-  const { error: upErr } = await db.from('carts').update({ updated_at: new Date().toISOString(), revision: (cart.revision || 0) + 1 }).eq('id', cart.id)
+  const qtyToSet = Number.isFinite(providedQty) ? providedQty : computedFromSeed
+  const { error: upErr } = await db.from('carts').update({ updated_at: now, revision: (cart.revision || 0) + 1, quantity_items: qtyToSet }).eq('id', cart.id)
     if (upErr) throw upErr
     return new NextResponse(null, { status: 204 })
   } catch (e) {
@@ -106,7 +120,10 @@ export async function PATCH(req, { params }) {
         if (error) throw error
       }
     }
-  const { error: upErr } = await db.from('carts').update({ updated_at: new Date().toISOString(), revision: currentRev + 1 }).eq('id', cart.id)
+  // Compute new total quantity
+  const { data: allItems } = await db.from('cart_items').select('qty').eq('cart_id', cart.id)
+  const sumQty = (allItems || []).reduce((s, r) => s + (Number(r.qty) || 0), 0)
+  const { error: upErr } = await db.from('carts').update({ updated_at: new Date().toISOString(), revision: currentRev + 1, quantity_items: sumQty }).eq('id', cart.id)
     if (upErr) throw upErr
     const { data: updatedCart } = await db.from('carts').select('*').eq('id', cart.id).single()
     const { data: items } = await db.from('cart_items').select('*').eq('cart_id', cart.id)

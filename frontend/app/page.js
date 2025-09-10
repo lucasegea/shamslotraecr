@@ -678,13 +678,65 @@ export default function HomePage() {
         createdNow = true
         try { localStorage.setItem('sharedCartId', id) } catch {}
       }
-      // Sembrar en servidor (idempotente). Si falla, usaremos ?seed= en el link.
+      // Sembrar o sincronizar en servidor (sólo al compartir). Si falla, usaremos ?seed= en el link.
       let seedOk = true
       try {
         if (items.length) {
-          const res = await fetch(`/api/cart/${id}?action=seed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seed: items }) })
-          seedOk = res.ok || res.status === 204
-          if (seedOk) useSupabaseCartRef.current = true
+          // 1) Asegurar carrito existente
+          await fetch(`/api/cart/${id}?action=seed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seed: items, totalQty: items.reduce((s, [,q])=>s+(Number(q)||0),0) }) }).catch(()=>{})
+          useSupabaseCartRef.current = true
+          // 2) Si sólo guardamos al compartir, sincronizar estado completo con PATCH
+          if (SAVE_ONLY_ON_SHARE) {
+            // Obtener revision e items del servidor
+            let serverRev = 0
+            let serverItems = []
+            try {
+              const gr = await fetch(`/api/cart/${id}`, { cache: 'no-store' })
+              if (gr.ok) {
+                const d = await gr.json()
+                serverRev = typeof d.revision === 'number' ? d.revision : 0
+                serverItems = Array.isArray(d.items) ? d.items : []
+              }
+            } catch {}
+            const serverIds = new Set(serverItems.map(r => r.product_id))
+            const localIds = new Set(items.map(([pid]) => pid))
+            const ops = []
+            // Upserts para todos los locales con snapshot
+            const byId = new Map(products.map ? products.map(p=>[p.id,p]) : [])
+            for (const [pid, qty] of items) {
+              // Buscar snapshot del producto en lista actual (puede faltar si no está en la página)
+              const local = (cartItems.find(ci=>ci?.product?.id===pid)?.product) || byId.get(pid) || { id: pid }
+              ops.push({ op: 'upsert', productId: pid, qty, snapshot: {
+                id: local.id,
+                name: local.name,
+                product_url: local.product_url,
+                image_url: local.image_url,
+                image_file_url: local.image_file_url,
+                final_price: local.final_price,
+                price_raw: local.price_raw,
+                currency: local.currency,
+              } })
+            }
+            // Remociones para los que están en servidor y no local
+            for (const pid of serverIds) { if (!localIds.has(pid)) ops.push({ op: 'remove', productId: pid }) }
+            if (ops.length) {
+              const doPatch = async (rev) => fetch(`/api/cart/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'If-Match': `W/"${rev}"` }, body: JSON.stringify({ ifRevision: rev, ops }) })
+              let pr = await doPatch(serverRev)
+              if (pr.status === 409) {
+                // Obtener nueva revision y reintentar
+                const gr2 = await fetch(`/api/cart/${id}`, { cache: 'no-store' }).catch(()=>null)
+                if (gr2 && gr2.ok) {
+                  const d2 = await gr2.json().catch(()=>null)
+                  const newRev = d2 && typeof d2.revision === 'number' ? d2.revision : serverRev
+                  pr = await doPatch(newRev)
+                }
+              }
+              seedOk = pr.ok || pr.status === 200
+              if (seedOk) {
+                try { const out = await pr.json(); if (out && typeof out.revision==='number') revisionRef.current = out.revision } catch {}
+              }
+            }
+          }
         }
       } catch {
         seedOk = false

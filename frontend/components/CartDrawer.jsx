@@ -106,8 +106,11 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
                     <Button
                       variant="outline"
                       onClick={async () => {
+                        let link = ''
                         try {
-                          const link = getShareLink ? await getShareLink() : buildCartShareLink()
+                          const totalQty = cartItems.reduce((s, i) => s + (Number(i.quantity) || 0), 0)
+                          link = getShareLink ? await getShareLink() : buildCartShareLink()
+                          // Nota: la sincronización y cantidad ya se resuelven dentro de getShareLink()
                           // Clipboard API with fallback
                           try {
                             await navigator.clipboard.writeText(link)
@@ -126,6 +129,12 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
                           setTimeout(() => setCopied(false), 1500)
                           toast({ title: 'Link copiado', description: 'El enlace del carrito se copió al portapapeles.' })
                         } catch (e) {
+                          try {
+                            // Último recurso: mostrar un prompt nativo con el link para copiar manualmente
+                            if (link) {
+                              window.prompt('Copia este enlace:', link)
+                            }
+                          } catch {}
                           toast({ title: 'No se pudo copiar', description: 'Intenta nuevamente o comparte manualmente.', variant: 'destructive' })
                         }
                       }}
