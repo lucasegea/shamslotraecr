@@ -1,7 +1,13 @@
 const nextConfig = {
   output: 'standalone',
   images: {
-    unoptimized: true,
+    unoptimized: false,
+    formats: ['image/avif', 'image/webp'],
+    remotePatterns: [
+      { protocol: 'https', hostname: '**.supabase.co' },
+      { protocol: 'https', hostname: '**.ofertasb.com' },
+      { protocol: 'https', hostname: '**' },
+    ],
   },
   experimental: {
     // Remove if not using Server Components

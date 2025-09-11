@@ -2,6 +2,7 @@ import './globals.css'
 import { cn } from '@/lib/utils'
 import Link from 'next/link';
 import { Toaster } from '@/components/ui/toaster'
+import NextTopLoader from 'nextjs-toploader'
 
 export const metadata = {
   title: 'Shams lo trae! - Los mejores productos al mejor precio',
@@ -28,12 +29,16 @@ export const viewport = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="es-CR" className="scroll-smooth">
+  <html lang="es-CR" className="scroll-smooth">
       <body className={cn(
         "min-h-screen bg-gray-100 font-sans antialiased",
         "selection:bg-primary/20 selection:text-primary-foreground"
       )}>
+    <link rel="preconnect" href="https://wjgitkxfzdmrblqzwryf.supabase.co" crossOrigin="anonymous" />
+    <link rel="preconnect" href="https://wa.me" />
         <div className="relative flex min-h-screen flex-col">
+          {/* Loading bar visible en transiciones de ruta y fetches client-side */}
+          <NextTopLoader color="#2563eb" height={3} showSpinner={false} zIndex={90} />
           <nav className="hidden md:block bg-gray-100 p-4 shadow-md">
             <ul className="flex space-x-4">
               <li>

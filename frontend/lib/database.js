@@ -13,7 +13,7 @@ export async function getCategories() {
       return []
     }
 
-    // Remove duplicates by name
+  // Unificar categorías con el mismo nombre y sumar sus contadores sin N+1 queries
     const categoriesMap = new Map()
     
     for (const category of data || []) {
@@ -26,21 +26,7 @@ export async function getCategories() {
       }
     }
 
-    // Get actual product counts
-    const categoriesWithActualCounts = []
-    for (const [name, category] of categoriesMap) {
-      const { count } = await supabase
-        .from('products')
-        .select('*', { count: 'exact', head: true })
-        .eq('category_id', category.id)
-
-      categoriesWithActualCounts.push({
-        ...category,
-        product_count: count || 0
-      })
-    }
-
-    return categoriesWithActualCounts
+  return Array.from(categoriesMap.values())
   } catch (error) {
     console.error('Error in getCategories:', error)
     return []

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useContext, useEffect } from 'react'
+import React, { useState, useContext, useMemo } from 'react'
 import Image from 'next/image'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Card, CardContent } from '@/components/ui/card'
@@ -9,52 +9,19 @@ import { Badge } from '@/components/ui/badge'
 import { ShoppingCart, ImageIcon, Maximize2 } from 'lucide-react'
 // (formatPrice no se usa directamente aquí para evitar confusiones de logs)
 import { logProductPriceData, getPriceToDisplay, formatPriceConsistently } from '@/lib/price-debug'
-import { supabase } from '@/lib/supabase'
 import { ImageViewerContext } from '@/app/page'
 
-export default function ProductCard({ product, onAddToCart }) {
+function ProductCard({ product, onAddToCart }) {
   const [imageError, setImageError] = useState(false)
   const [imageLoading, setImageLoading] = useState(true)
   const [quantity, setQuantity] = useState(1)
-  const [liveProduct, setLiveProduct] = useState(product)
-
-  // Obtener el producto más actualizado como hace el carrito
-  useEffect(() => {
-    let active = true
-    ;(async () => {
-      try {
-        const { data, error } = await supabase
-          .from('products')
-          .select(`
-            id,
-            name,
-            product_url,
-            image_url,
-            image_file_url,
-            price_raw,
-            final_price,
-            currency
-          `)
-          .eq('id', product.id)
-          .single()
-
-        if (!error && data && active) {
-          setLiveProduct(prev => ({ ...prev, ...data }))
-        } else if (error) {
-          // swallow
-        }
-      } catch (err) {
-        // swallow
-      }
-    })()
-    return () => { active = false }
-  }, [product?.id])
+  // Nota: no hacemos fetch por tarjeta; el precio final se valida al "Agregar al carrito" en el nivel superior
   
   // Usar el contexto del visor de imágenes global
   const { openImageViewer } = useContext(ImageViewerContext)
   
   // Enfoque simplificado para obtener la URL de imagen
-  const getImageUrl = () => {
+  const imageUrl = useMemo(() => {
     if (imageError) return null
     
     // Lista de posibles URLs en orden de prioridad
@@ -91,14 +58,12 @@ export default function ProductCard({ product, onAddToCart }) {
       return selected.url
     }
     return null
-  }
-
-  const imageUrl = getImageUrl()
+  }, [imageError, product?.image_file_url, product?.image_url])
   
   // Sin logs en producción
   logProductPriceData(product, 'ProductCard v2');
 
-  const fpCandidate = (liveProduct?.final_price ?? product?.final_price);
+  const fpCandidate = product?.final_price
   let finalPriceValue = 0;
   if (typeof fpCandidate === 'number' && isFinite(fpCandidate)) {
     finalPriceValue = fpCandidate;
@@ -107,15 +72,13 @@ export default function ProductCard({ product, onAddToCart }) {
     const num = Number(cleaned);
     if (!isNaN(num) && isFinite(num)) finalPriceValue = num;
   } else {
-    finalPriceValue = getPriceToDisplay(liveProduct ?? product);
+    finalPriceValue = getPriceToDisplay(product);
   }
   // Formateo final para UI
-  const formattedPrice = formatPriceConsistently(finalPriceValue);
+  const formattedPrice = useMemo(() => formatPriceConsistently(finalPriceValue), [finalPriceValue]);
   
   const handleAddToCart = () => {
-    if (onAddToCart) {
-      onAddToCart(liveProduct ?? product, quantity)
-    }
+  if (onAddToCart) onAddToCart(product, quantity)
   }
   
   const incrementQuantity = () => setQuantity(prev => prev + 1)
@@ -267,3 +230,5 @@ export default function ProductCard({ product, onAddToCart }) {
     </motion.div>
   )
 }
+
+export default React.memo(ProductCard)

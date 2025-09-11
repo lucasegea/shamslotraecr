@@ -9,9 +9,10 @@ import { Search, Waves, ShoppingCart, Filter, ChevronDown } from 'lucide-react'
 import { getCategories, getProducts } from '@/lib/database'
 import { supabase } from '@/lib/supabase'
 import { useIsMobile } from '@/hooks/use-mobile'
-import CategorySidebar from '@/components/CategorySidebar'
-import ProductGrid from '@/components/ProductGrid'
-import ProductPagination from '@/components/ProductPagination'
+import dynamic from 'next/dynamic'
+const CategorySidebar = dynamic(() => import('@/components/CategorySidebar'), { ssr: false, loading: () => null })
+const ProductGrid = dynamic(() => import('@/components/ProductGrid'), { ssr: false, loading: () => null })
+const ProductPagination = dynamic(() => import('@/components/ProductPagination'), { ssr: false, loading: () => null })
 import SearchBar from '@/components/SearchBar'
 import CartDrawer from '@/components/CartDrawer'
 import ImageViewer from '@/components/ImageViewer'
