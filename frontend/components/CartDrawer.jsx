@@ -86,7 +86,7 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
     }
     const link = `${window.location.origin}/cart/${shareId}`
     // 2) Abrir WhatsApp inmediatamente (sin await para no ser bloqueado)
-    const msisdn = '5491162802566' // sin '+' según docs de wa.me
+  const msisdn = '5492216083824' // sin '+' según docs de wa.me
     const msg = `Hola! Quiero finalizar la compra con este carrito: ${link}`
     const wa = `https://wa.me/${msisdn}?text=${encodeURIComponent(msg)}`
     try { window.open(wa, '_blank', 'noopener,noreferrer') } catch {}
