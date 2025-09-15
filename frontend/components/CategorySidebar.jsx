@@ -117,6 +117,7 @@ export default function CategorySidebar({ parents = [], totalGlobal = 0, isMobil
                 setOpenValue('');
                 setClearAllRequested(true);
                 setPending({ categoryId: null, parentId: null });
+                onBeforeSelect && onBeforeSelect('all')
                 try { sessionStorage.setItem('curatedShuffle', String(Date.now())) } catch {}
                 const sp = new URLSearchParams(searchParams.toString())
                 sp.delete('categoryId')
