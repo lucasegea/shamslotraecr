@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Search, Waves, ShoppingCart, Filter, ChevronDown } from 'lucide-react'
 
-import { getCategories, getProducts } from '@/lib/database'
+import { getCategories, getProducts, getCategoryTree, getProductsByCategoryIds } from '@/lib/database'
 import { supabase } from '@/lib/supabase'
 import { useIsMobile } from '@/hooks/use-mobile'
 import dynamic from 'next/dynamic'
@@ -19,6 +19,7 @@ import ImageViewer from '@/components/ImageViewer'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import Link from 'next/link'
+import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 
 // Contexto para el visor de imágenes
 export const ImageViewerContext = createContext({
@@ -28,6 +29,9 @@ export const ImageViewerContext = createContext({
 
 export default function HomePage() {
   const [categories, setCategories] = useState([])
+  const [categoryParents, setCategoryParents] = useState([])
+  const [childIdsByParent, setChildIdsByParent] = useState(new Map())
+  const [totalGlobal, setTotalGlobal] = useState(0)
   const [products, setProducts] = useState([])
   const [selectedCategory, setSelectedCategory] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
@@ -53,6 +57,11 @@ export default function HomePage() {
   const [totalPages, setTotalPages] = useState(1)
   const isMobile = useIsMobile()
   const productsPerPage = isMobile ? 24 : 12
+  const searchParams = useSearchParams()
+  const categoryIdParam = searchParams?.get('categoryId')
+  const parentIdParam = searchParams?.get('parentId')
+  const router = useRouter()
+  const pathname = usePathname()
   
   // ImageViewer state
   const [imageViewerState, setImageViewerState] = useState({
@@ -92,12 +101,16 @@ export default function HomePage() {
     async function loadInitialData() {
       setLoading(true)
       try {
-        const [categoriesData, productsData] = await Promise.all([
+        const [categoriesData, productsData, tree] = await Promise.all([
           getCategories(),
-          getProducts({ limit: productsPerPage, page: 1 })
+          getProducts({ limit: productsPerPage, page: 1 }),
+          getCategoryTree()
         ])
-        
+
         setCategories(categoriesData)
+        setCategoryParents(tree.parents || [])
+        setChildIdsByParent(tree.byParent || new Map())
+        setTotalGlobal(tree.totalGlobal || 0)
         setProducts(productsData.products)
         setTotalProducts(productsData.totalCount)
       } catch (error) {
@@ -110,17 +123,35 @@ export default function HomePage() {
     loadInitialData()
   }, [])
 
-  // Load products when category, search, page, or productsPerPage changes
+  // Load products when filters, search, page, or productsPerPage change
   useEffect(() => {
     async function loadProducts() {
       setProductsLoading(true)
       try {
-        const result = await getProducts({
-          categoryId: selectedCategory?.id,
-          searchTerm: searchTerm.trim(),
-          limit: productsPerPage,
-          page: currentPage
-        })
+        let result
+        const cid = categoryIdParam ? Number(categoryIdParam) : null
+        const pid = parentIdParam ? Number(parentIdParam) : null
+        if (cid) {
+          result = await getProducts({
+            categoryId: cid,
+            searchTerm: searchTerm.trim(),
+            limit: productsPerPage,
+            page: currentPage
+          })
+        } else if (pid) {
+          const ids = childIdsByParent.get(pid) || []
+          result = await getProductsByCategoryIds(ids, {
+            searchTerm: searchTerm.trim(),
+            limit: productsPerPage,
+            page: currentPage
+          })
+        } else {
+          result = await getProducts({
+            searchTerm: searchTerm.trim(),
+            limit: productsPerPage,
+            page: currentPage
+          })
+        }
         
   // Logs de depuración removidos para producción
         
@@ -148,7 +179,7 @@ export default function HomePage() {
     if (!loading) {
       loadProducts()
     }
-  }, [selectedCategory, searchTerm, currentPage, loading, productsPerPage])
+  }, [categoryIdParam, parentIdParam, searchTerm, currentPage, loading, productsPerPage, childIdsByParent])
 
   const handleCategorySelect = (category) => {
     setSelectedCategory(category)
@@ -809,11 +840,37 @@ export default function HomePage() {
     if (searchTerm) {
       return `Resultados para "${searchTerm}"`
     }
-    if (selectedCategory) {
-      return selectedCategory.name
+    const cid = categoryIdParam ? Number(categoryIdParam) : null
+    const pid = parentIdParam ? Number(parentIdParam) : null
+    if (cid) {
+      // Try to find child name in tree
+      for (const p of categoryParents) {
+        const found = p.children.find((c) => c.id === cid)
+        if (found) return found.name
+      }
+    }
+    if (pid) {
+      const p = categoryParents.find((x) => x.id === pid)
+      if (p) return p.name
     }
     return 'Todos los productos'
-  }, [searchTerm, selectedCategory])
+  }, [searchTerm, categoryIdParam, parentIdParam, categoryParents])
+
+  const selectedCategoryName = useMemo(() => {
+    const cid = categoryIdParam ? Number(categoryIdParam) : null
+    const pid = parentIdParam ? Number(parentIdParam) : null
+    if (cid) {
+      for (const p of categoryParents) {
+        const found = (p.children || []).find((c) => c.id === cid)
+        if (found) return found.name
+      }
+    }
+    if (pid) {
+      const p = categoryParents.find((x) => x.id === pid)
+      return p?.name || ''
+    }
+    return ''
+  }, [categoryIdParam, parentIdParam, categoryParents])
 
   const totalCartItems = cartItems.reduce((sum, item) => sum + item.quantity, 0)
 
@@ -853,7 +910,7 @@ export default function HomePage() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6 }}
       >
-  <div className="mx-auto w-full max-w-screen-xl px-0 sm:px-4 py-4 sm:py-6">
+  <div className="mx-auto w-full lg:w-[96%] max-w-screen-2xl px-0 sm:px-3 py-4 sm:py-6">
           <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-3">
@@ -940,8 +997,8 @@ export default function HomePage() {
       </motion.header>
 
       {/* Main Content */}
-  <main className="mx-auto w-full max-w-screen-xl px-0 sm:px-4 py-5 sm:py-8">
-        <div className="flex flex-col lg:flex-row gap-5 lg:gap-8">
+  <main className="mx-auto w-full lg:w-[96%] max-w-screen-2xl px-0 sm:px-3 py-5 sm:py-8">
+  <div className="flex flex-col lg:flex-row gap-4 lg:gap-7">
           {/* Sidebar - desktop only */}
           <motion.aside
             className="hidden lg:block"
@@ -949,10 +1006,13 @@ export default function HomePage() {
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.6, delay: 0.2 }}
           >
-            <CategorySidebar
-              categories={categories}
-              selectedCategory={selectedCategory}
-              onCategorySelect={handleCategorySelect}
+            <CategorySidebar 
+              parents={categoryParents} 
+              totalGlobal={totalGlobal}
+              onBeforeSelect={() => {
+                // mostrar esqueletos inmediatamente
+                setProductsLoading(true)
+              }}
             />
           </motion.aside>
 
@@ -976,25 +1036,17 @@ export default function HomePage() {
                   <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform duration-200 group-open:rotate-180" />
                 </summary>
                 <div className="pt-0 overflow-hidden transition-all duration-200 ease-in-out max-h-0 opacity-0 group-open:max-h-[60vh] group-open:opacity-100">
-                  <CategorySidebar
-                    categories={categories}
-                    selectedCategory={selectedCategory}
-                    onCategorySelect={(cat) => {
-                      // Mostrar esqueletos inmediatamente para evitar parpadeos
+                  <CategorySidebar 
+                    parents={categoryParents} 
+                    totalGlobal={totalGlobal} 
+                    isMobile={true}
+                    onBeforeSelect={() => {
                       setProductsLoading(true)
-                      handleCategorySelect(cat)
-                      // Cerrar el acordeón en el siguiente frame para que se vea la transición
-                      if (typeof requestAnimationFrame === 'function') {
-                        requestAnimationFrame(() => {
-                          if (mobileCategoriesRef.current) {
-                            mobileCategoriesRef.current.open = false
-                          }
-                        })
-                      } else if (mobileCategoriesRef.current) {
-                        mobileCategoriesRef.current.open = false
+                      // cerrar el acordeón móvil para ver el grid
+                      if (mobileCategoriesRef.current) {
+                        try { mobileCategoriesRef.current.open = false } catch {}
                       }
                     }}
-                    isMobile={true}
                   />
                 </div>
               </details>
@@ -1015,13 +1067,18 @@ export default function HomePage() {
               </div>
 
               <div className="flex items-center gap-4">
-                {(selectedCategory || searchTerm) && (
+                {((categoryIdParam || parentIdParam) || searchTerm) && (
                   <Button
                     variant="outline"
                     onClick={() => {
                       setSelectedCategory(null)
                       setSearchTerm('')
                       setCurrentPage(1)
+                      const sp = new URLSearchParams(searchParams.toString())
+                      sp.delete('categoryId')
+                      sp.delete('parentId')
+                      const q = sp.toString()
+                      router.push(q ? `${pathname}?${q}` : pathname)
                     }}
                     className="shrink-0"
                   >
@@ -1036,7 +1093,7 @@ export default function HomePage() {
               products={products}
               loading={productsLoading}
               searchTerm={searchTerm}
-              categoryName={selectedCategory?.name}
+              categoryName={selectedCategoryName}
               onAddToCart={handleAddToCart}
             />
             

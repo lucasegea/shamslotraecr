@@ -4,95 +4,158 @@ import { motion } from 'framer-motion'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { cn } from '@/lib/utils'
 import { Package, Filter } from 'lucide-react'
+import { useRouter, useSearchParams, usePathname } from 'next/navigation'
+import { useEffect, useState } from 'react'
 
-export default function CategorySidebar({ categories, selectedCategory, onCategorySelect, isMobile = false }) {
-  const totalProducts = categories.reduce((sum, cat) => sum + (cat.product_count || 0), 0)
+// Props:
+// parents: CategoryNode[] (already limited/sorted upstream or we limit here)
+// totalGlobal: number
+export default function CategorySidebar({ parents = [], totalGlobal = 0, isMobile = false, onBeforeSelect }) {
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+
+  const [pending, setPending] = useState({ categoryId: null, parentId: null })
+  const [openValue, setOpenValue] = useState('')
+  const [clearAllRequested, setClearAllRequested] = useState(false)
+  const spCategoryId = searchParams.get('categoryId')
+  const spParentId = searchParams.get('parentId')
+  const selectedCategoryId = pending.categoryId ? String(pending.categoryId) : spCategoryId
+  const selectedParentId = pending.parentId ? String(pending.parentId) : spParentId
+
+  // Clear optimistic pending once URL reflects the selection
+  useEffect(() => {
+    if (pending.categoryId && String(pending.categoryId) === spCategoryId) {
+      setPending({ categoryId: null, parentId: null })
+    } else if (pending.parentId && String(pending.parentId) === spParentId) {
+      setPending({ categoryId: null, parentId: null })
+    }
+  }, [spCategoryId, spParentId, pending])
+
+  // Keep accordion open state in sync with URL filters
+  useEffect(() => {
+    if (clearAllRequested) {
+      setOpenValue('')
+      if (!spParentId && !spCategoryId) {
+        setClearAllRequested(false)
+      }
+      return
+    }
+    if (spParentId) {
+      setOpenValue(`p-${spParentId}`)
+    } else if (spCategoryId) {
+      // find parent of selected category and open it
+      const parent = parents.find((p) => (p.children || []).some((c) => String(c.id) === spCategoryId))
+      setOpenValue(parent ? `p-${parent.id}` : '')
+    } else {
+      setOpenValue('')
+    }
+  }, [spParentId, spCategoryId, parents, clearAllRequested])
+
+  const isAllSelected = !selectedCategoryId && !selectedParentId
+
+  const setParam = (next) => {
+    const sp = new URLSearchParams(searchParams.toString())
+    // Clear both first
+    sp.delete('categoryId')
+    sp.delete('parentId')
+    if (next?.categoryId) {
+      setPending({ categoryId: next.categoryId, parentId: null })
+      onBeforeSelect && onBeforeSelect('category', next.categoryId)
+      sp.set('categoryId', String(next.categoryId))
+    }
+    if (next?.parentId) {
+      setPending({ categoryId: null, parentId: next.parentId })
+      onBeforeSelect && onBeforeSelect('parent', next.parentId)
+      sp.set('parentId', String(next.parentId))
+    }
+    router.push(`${pathname}?${sp.toString()}`)
+  }
+
+  const PINNED_PARENT_ID = 36
+  const orderedParents = [...parents].sort((a, b) => {
+    if (a.id === PINNED_PARENT_ID) return -1
+    if (b.id === PINNED_PARENT_ID) return 1
+    const diff = (Number(b.productCount || 0) - Number(a.productCount || 0))
+    if (diff !== 0) return diff
+    return a.name.localeCompare(b.name)
+  })
+  const topParents = orderedParents.slice(0, 4)
 
   return (
-    <div className={isMobile ? "w-full h-fit" : "w-80 sticky top-4 h-fit"}>
-      <Card className={cn(
-        isMobile ? "bg-transparent border-0 shadow-none" : "glass-card bg-white shadow-sm"
-      )}>
+  <div className={isMobile ? 'w-full h-fit' : 'w-[22rem] sticky top-4 h-fit'}>
+      <Card className={cn(isMobile ? 'bg-transparent border-0 shadow-none' : 'glass-card bg-white shadow-sm')}>
         <CardHeader className="pb-4">
-          <CardTitle className="flex items-center gap-2 text-gray-900">
+          <CardTitle className="flex items-center gap-2 text-gray-900 text-lg">
             <Filter className="h-5 w-5 text-blue-600" />
             Categorías
           </CardTitle>
-          <p className="text-sm text-gray-600">
-            {totalProducts} productos en total
-          </p>
+          <p className="text-sm text-gray-600">{totalGlobal} productos en total</p>
         </CardHeader>
-        
         <CardContent className="space-y-2">
-          {/* All Products Option */}
           <motion.div whileHover={{ x: 4 }} transition={{ duration: 0.2 }}>
             <Button
-              variant={!selectedCategory ? "default" : "ghost"}
-              className={cn(
-                "w-full justify-between p-3 h-auto hover-lift",
-                !selectedCategory 
-                  ? "bg-blue-600 text-white hover:bg-blue-700" 
-                  : "hover:bg-gray-50 text-gray-700"
-              )}
-              onClick={() => onCategorySelect(null)}
+              variant={isAllSelected ? 'default' : 'ghost'}
+              className={cn('w-full justify-between py-3.5 px-3 h-auto hover-lift text-[15px]', isAllSelected ? 'bg-blue-600 text-white hover:bg-blue-700' : 'hover:bg-gray-50 text-gray-700')}
+              onClick={() => { setOpenValue(''); setClearAllRequested(true); setPending({ categoryId: null, parentId: null }); setParam(null) }}
             >
               <div className="flex items-center gap-3">
                 <Package className="h-4 w-4" />
                 <span className="font-medium">Todos los productos</span>
               </div>
-              <Badge 
-                variant={!selectedCategory ? "secondary" : "outline"} 
-                className={cn(
-                  "ml-2",
-                  !selectedCategory 
-                    ? "bg-white text-blue-600" 
-                    : "bg-gray-100 text-gray-700"
-                )}
-              >
-                {totalProducts}
+              <Badge variant={isAllSelected ? 'secondary' : 'outline'} className={cn('ml-2 rounded-full px-2.5 py-0.5 text-[12px]', isAllSelected ? 'bg-white text-blue-600' : 'bg-gray-100 text-gray-700')}>
+                {totalGlobal}
               </Badge>
             </Button>
           </motion.div>
 
-          {/* Category List */}
-      <div className={cn("space-y-1", isMobile ? "max-h-[50vh]" : "max-h-96", "overflow-y-auto")}
-      >
-            {categories.map((category) => (
-              <motion.div 
-                key={`${category.id}-${category.name}`}
-                whileHover={{ x: 4 }} 
-                transition={{ duration: 0.2 }}
-              >
-                <Button
-                  variant={selectedCategory?.id === category.id ? "default" : "ghost"}
-                  className={cn(
-                    "w-full justify-between p-3 h-auto text-left hover-lift",
-                    selectedCategory?.id === category.id 
-                      ? "bg-blue-600 text-white hover:bg-blue-700" 
-                      : "hover:bg-gray-50 text-gray-700"
-                  )}
-                  onClick={() => onCategorySelect(category)}
-                >
-                  <span className="font-medium truncate flex-1 text-balance">
-                    {category.name}
-                  </span>
-                  
-                  <Badge 
-                    variant={selectedCategory?.id === category.id ? "secondary" : "outline"} 
-                    className={cn(
-                      "ml-2 shrink-0",
-                      selectedCategory?.id === category.id 
-                        ? "bg-white text-blue-600" 
-                        : "bg-gray-100 text-gray-700"
-                    )}
-                  >
-                    {category.product_count || 0}
-                  </Badge>
-                </Button>
-              </motion.div>
-            ))}
+          <div className={cn('space-y-1', isMobile ? 'max-h-[55vh]' : 'max-h-[28rem]', 'overflow-y-auto')}>
+            <Accordion type="single" collapsible className="w-full" value={openValue} onValueChange={setOpenValue}>
+              {topParents.map((parent) => {
+                const parentActive = !selectedCategoryId && selectedParentId === String(parent.id)
+                return (
+                  <AccordionItem key={parent.id} value={`p-${parent.id}`}>
+                    <AccordionTrigger
+                      className={cn(
+                        'px-2 py-2.5 rounded-md',
+                        parentActive ? 'bg-blue-600 text-white hover:bg-blue-700' : 'text-gray-700 hover:bg-gray-50'
+                      )}
+                    >
+                      <div className="w-full flex items-center justify-between pr-2" onClick={() => { setOpenValue(`p-${parent.id}`); setParam({ parentId: parent.id }) }}>
+                        <span className="font-medium truncate flex-1 text-left">{parent.name}</span>
+                        <Badge variant={parentActive ? 'secondary' : 'outline'} className={cn('ml-2 rounded-full px-2.5 py-0.5 text-[12px]', parentActive ? 'bg-white text-blue-600' : 'bg-gray-100 text-gray-700')}>
+                          {parent.productCount || 0}
+                        </Badge>
+                      </div>
+                    </AccordionTrigger>
+                    <AccordionContent>
+                      <div className="space-y-1">
+                        {parent.children.map((child) => {
+                          const childActive = selectedCategoryId === String(child.id)
+                          return (
+                            <motion.div key={child.id} whileHover={{ x: 4 }} transition={{ duration: 0.2 }}>
+                              <Button
+                                variant={childActive ? 'default' : 'ghost'}
+                                className={cn('w-full justify-between py-2.5 px-3 h-auto text-left hover-lift', childActive ? 'bg-blue-600 text-white hover:bg-blue-700' : 'hover:bg-gray-50 text-gray-700')}
+                                onClick={() => { setOpenValue(`p-${parent.id}`); setParam({ categoryId: child.id }) }}
+                              >
+                                <span className="truncate flex-1">{child.name}</span>
+                                <Badge variant={childActive ? 'secondary' : 'outline'} className={cn('ml-2 shrink-0 rounded-full px-2.5 py-0.5 text-[12px]', childActive ? 'bg-white text-blue-600' : 'bg-gray-100 text-gray-700')}>
+                                  {child.productCount || 0}
+                                </Badge>
+                              </Button>
+                            </motion.div>
+                          )
+                        })}
+                      </div>
+                    </AccordionContent>
+                  </AccordionItem>
+                )
+              })}
+            </Accordion>
           </div>
         </CardContent>
       </Card>
