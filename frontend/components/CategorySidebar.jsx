@@ -75,15 +75,28 @@ export default function CategorySidebar({ parents = [], totalGlobal = 0, isMobil
     router.push(`${pathname}?${sp.toString()}`)
   }
 
-  const PINNED_PARENT_ID = 36
+  const norm = (s) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
+  const ORDER = new Map([
+    ['tecnologia', 0],
+    ['moda y accesorios', 1],
+    ['hogar y oficina', 2],
+    ['hogar, oficina y otros', 2],
+    ['jugueteria', 3],
+    ['sin categoria', 4],
+    ['uncategorized', 4],
+  ])
   const orderedParents = [...parents].sort((a, b) => {
-    if (a.id === PINNED_PARENT_ID) return -1
-    if (b.id === PINNED_PARENT_ID) return 1
+    const ai = ORDER.has(norm(a.name)) ? ORDER.get(norm(a.name)) : 10
+    const bi = ORDER.has(norm(b.name)) ? ORDER.get(norm(b.name)) : 10
+    if (ai !== bi) return ai - bi
     const diff = (Number(b.productCount || 0) - Number(a.productCount || 0))
     if (diff !== 0) return diff
     return a.name.localeCompare(b.name)
   })
-  const topParents = orderedParents.slice(0, 4)
+  const LAST_PARENT_ID = 35
+  const baseParents = orderedParents.filter(p => p.id !== LAST_PARENT_ID).slice(0, 4)
+  const lastParent = orderedParents.find(p => p.id === LAST_PARENT_ID)
+  const topParents = lastParent ? [...baseParents, lastParent] : baseParents
 
   return (
   <div className={isMobile ? 'w-full h-fit' : 'w-[22rem] sticky top-4 h-fit'}>
@@ -100,7 +113,17 @@ export default function CategorySidebar({ parents = [], totalGlobal = 0, isMobil
             <Button
               variant={isAllSelected ? 'default' : 'ghost'}
               className={cn('w-full justify-between py-3.5 px-3 h-auto hover-lift text-[15px]', isAllSelected ? 'bg-blue-600 text-white hover:bg-blue-700' : 'hover:bg-gray-50 text-gray-700')}
-              onClick={() => { setOpenValue(''); setClearAllRequested(true); setPending({ categoryId: null, parentId: null }); setParam(null) }}
+              onClick={() => {
+                setOpenValue('');
+                setClearAllRequested(true);
+                setPending({ categoryId: null, parentId: null });
+                try { sessionStorage.setItem('curatedShuffle', String(Date.now())) } catch {}
+                const sp = new URLSearchParams(searchParams.toString())
+                sp.delete('categoryId')
+                sp.delete('parentId')
+                sp.delete('shuffle')
+                router.push(`${pathname}?${sp.toString()}`)
+              }}
             >
               <div className="flex items-center gap-3">
                 <Package className="h-4 w-4" />
@@ -116,6 +139,25 @@ export default function CategorySidebar({ parents = [], totalGlobal = 0, isMobil
             <Accordion type="single" collapsible className="w-full" value={openValue} onValueChange={setOpenValue}>
               {topParents.map((parent) => {
                 const parentActive = !selectedCategoryId && selectedParentId === String(parent.id)
+                const hasChildren = Array.isArray(parent.children) && parent.children.length > 0
+                if (!hasChildren) {
+                  return (
+                    <div key={parent.id} className="px-0">
+                      <motion.div whileHover={{ x: 4 }} transition={{ duration: 0.2 }}>
+                        <Button
+                          variant={parentActive ? 'default' : 'ghost'}
+                          className={cn('w-full justify-between py-2.5 px-3 h-auto text-left hover-lift', parentActive ? 'bg-blue-600 text-white hover:bg-blue-700' : 'hover:bg-gray-50 text-gray-700')}
+                          onClick={() => { setOpenValue(''); setParam({ parentId: parent.id }) }}
+                        >
+                          <span className="font-medium truncate flex-1 text-left">{parent.name}</span>
+                          <Badge variant={parentActive ? 'secondary' : 'outline'} className={cn('ml-2 shrink-0 rounded-full px-2.5 py-0.5 text-[12px]', parentActive ? 'bg-white text-blue-600' : 'bg-gray-100 text-gray-700')}>
+                            {parent.productCount || 0}
+                          </Badge>
+                        </Button>
+                      </motion.div>
+                    </div>
+                  )
+                }
                 return (
                   <AccordionItem key={parent.id} value={`p-${parent.id}`}>
                     <AccordionTrigger

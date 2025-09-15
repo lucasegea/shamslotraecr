@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Search, Waves, ShoppingCart, Filter, ChevronDown } from 'lucide-react'
 
-import { getCategories, getProducts, getCategoryTree, getProductsByCategoryIds } from '@/lib/database'
+import { getCategories, getProducts, getCategoryTree, getProductsByCategoryIds, getCuratedAllProductsMix, getCuratedAllProductsOrder } from '@/lib/database'
 import { supabase } from '@/lib/supabase'
 import { useIsMobile } from '@/hooks/use-mobile'
 import dynamic from 'next/dynamic'
@@ -60,6 +60,7 @@ export default function HomePage() {
   const searchParams = useSearchParams()
   const categoryIdParam = searchParams?.get('categoryId')
   const parentIdParam = searchParams?.get('parentId')
+  // Curated shuffle seed lives in sessionStorage instead of URL
   const router = useRouter()
   const pathname = usePathname()
   
@@ -131,6 +132,7 @@ export default function HomePage() {
         let result
         const cid = categoryIdParam ? Number(categoryIdParam) : null
         const pid = parentIdParam ? Number(parentIdParam) : null
+        const isCuratedAllNoSearch = !cid && !pid && !searchTerm.trim()
         if (cid) {
           result = await getProducts({
             categoryId: cid,
@@ -146,11 +148,33 @@ export default function HomePage() {
             page: currentPage
           })
         } else {
-          result = await getProducts({
-            searchTerm: searchTerm.trim(),
-            limit: productsPerPage,
-            page: currentPage
-          })
+          if (!searchTerm.trim()) {
+            // Full catalog in curated random order with pagination, keyed by shuffle seed
+            const childMeta = []
+            for (const p of categoryParents) {
+              if ((p.productCount || 0) > 0) childMeta.push({ id: p.id, productCount: p.productCount })
+              for (const c of (p.children || [])) {
+                if ((c.productCount || 0) > 0) childMeta.push({ id: c.id, productCount: c.productCount })
+              }
+            }
+            let seed = Date.now()
+            try {
+              const s = sessionStorage.getItem('curatedShuffle')
+              if (s) seed = Number(s)
+              else {
+                seed = Date.now()
+                sessionStorage.setItem('curatedShuffle', String(seed))
+              }
+            } catch {}
+            result = await getCuratedAllProductsOrder(childMeta, { page: currentPage, limit: productsPerPage, seed })
+          } else {
+            // Global search with no filters: default search order
+            result = await getProducts({
+              searchTerm: searchTerm.trim(),
+              limit: productsPerPage,
+              page: currentPage
+            })
+          }
         }
         
   // Logs de depuración removidos para producción
@@ -159,7 +183,8 @@ export default function HomePage() {
         setProducts(result.products)
         setTotalProducts(result.totalCount)
         
-        const pages = Math.max(1, Math.ceil(result.totalCount / productsPerPage))
+  const isCuratedAll = !cid && !pid && !searchTerm.trim()
+  const pages = Math.max(1, Math.ceil(result.totalCount / productsPerPage))
         setTotalPages(pages)
         
         // Si la página actual es mayor que el total de páginas, volver a la primera
@@ -179,7 +204,7 @@ export default function HomePage() {
     if (!loading) {
       loadProducts()
     }
-  }, [categoryIdParam, parentIdParam, searchTerm, currentPage, loading, productsPerPage, childIdsByParent])
+  }, [categoryIdParam, parentIdParam, searchTerm, currentPage, loading, productsPerPage, childIdsByParent, searchParams, router, pathname])
 
   const handleCategorySelect = (category) => {
     setSelectedCategory(category)
