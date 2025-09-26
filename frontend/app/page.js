@@ -2,6 +2,9 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef, createContext } from 'react'
+// Simple in-memory cache for paginated product result sets
+// Keyed by: {cid, pid, search, page, limit, seed}
+const pageDataCache = new Map()
 import { v4 as uuidv4 } from 'uuid'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Search, Waves, ShoppingCart, Filter, ChevronDown } from 'lucide-react'
@@ -48,7 +51,6 @@ export default function HomePage() {
   const isRestoringRef = useRef(false)
   const useSupabaseCartRef = useRef(false)
   const revisionRef = useRef(0)
-  // Modo: guardar sólo al compartir (sin auto-sync que mueva la UI)
   const SAVE_ONLY_ON_SHARE = true
   
   // Pagination state
@@ -63,6 +65,50 @@ export default function HomePage() {
   // Curated shuffle seed lives in sessionStorage instead of URL
   const router = useRouter()
   const pathname = usePathname()
+  const cartUrlCleanedRef = useRef(false)
+  const lastCatalogUrlRef = useRef('')
+  const isCartRoute = useMemo(() => typeof pathname === 'string' && pathname.startsWith('/cart/'), [pathname])
+
+  // Helper: persist what the catalog URL WOULD be (without touching current URL if on /cart/)
+  const savePlannedCatalogUrl = (sp) => {
+    try {
+      const currentBase = lastCatalogUrlRef.current || (typeof window !== 'undefined' ? `${window.location.origin}/` : '/')
+      const baseUrl = new URL(currentBase)
+      // preserve base path if it's not a cart route; otherwise default to '/'
+      if (baseUrl.pathname.startsWith('/cart/')) baseUrl.pathname = '/'
+      baseUrl.search = sp ? `?${sp.toString()}` : ''
+      const planned = baseUrl.toString()
+      lastCatalogUrlRef.current = planned
+      if (typeof window !== 'undefined') sessionStorage.setItem('lastCatalogUrl', planned)
+    } catch {}
+  }
+
+  const pushCatalogUrl = (sp) => {
+    if (isCartRoute) {
+      // Don't mutate current /cart URL; store planned catalog URL instead
+      savePlannedCatalogUrl(sp)
+      return
+    }
+    const q = sp?.toString?.() || ''
+    router.push(q ? `${pathname}?${q}` : pathname)
+  }
+
+  const replaceCatalogUrl = (sp) => {
+    if (isCartRoute) {
+      savePlannedCatalogUrl(sp)
+      return
+    }
+    const q = sp?.toString?.() || ''
+    router.replace(q ? `${pathname}?${q}` : pathname)
+  }
+
+  // Keep currentPage in sync with URL ?page=, default to 1
+  useEffect(() => {
+    const p = searchParams?.get('page')
+    const n = p ? Number(p) : 1
+    const valid = Number.isFinite(n) && n > 0 ? Math.floor(n) : 1
+    if (valid !== currentPage) setCurrentPage(valid)
+  }, [searchParams])
   
   // ImageViewer state
   const [imageViewerState, setImageViewerState] = useState({
@@ -70,8 +116,6 @@ export default function HomePage() {
     imageUrl: '',
     alt: ''
   })
-  
-  // Ref for mobile categories <details>
   const mobileCategoriesRef = useRef(null)
   
   // Función para abrir el visor de imágenes
@@ -82,13 +126,12 @@ export default function HomePage() {
       alt
     })
   }
-  
-  // Función para cerrar el visor de imágenes
+
   const closeImageViewer = () => {
-    setImageViewerState({
-      ...imageViewerState,
+    setImageViewerState((prev) => ({
+      ...prev,
       isOpen: false
-    })
+    }))
   }
   
   // Valor del contexto para el visor de imágenes
@@ -129,26 +172,89 @@ export default function HomePage() {
     async function loadProducts() {
       setProductsLoading(true)
       try {
-        let result
-        const cid = categoryIdParam ? Number(categoryIdParam) : null
-        const pid = parentIdParam ? Number(parentIdParam) : null
-        const isCuratedAllNoSearch = !cid && !pid && !searchTerm.trim()
+        // Guard against stale responses
+        const rid = (loadProducts._rid = (loadProducts._rid || 0) + 1)
+
+  let result
+  const trimmed = searchTerm.trim()
+  const cidRaw = categoryIdParam ? Number(categoryIdParam) : null
+  const pidRaw = parentIdParam ? Number(parentIdParam) : null
+  // Si hay búsqueda activa, ignorar filtros de categoría para que sea global
+  const cid = trimmed ? null : cidRaw
+  const pid = trimmed ? null : pidRaw
+  const isCuratedAllNoSearch = !cid && !pid && !trimmed
+
+        // Proactively clamp page when switching to categories with fewer pages
+        try {
+          let estimateTotal = null
+          if (cid) {
+            // find child in tree
+            for (const p of categoryParents) {
+              const c = (p.children || []).find(ch => ch.id === cid)
+              if (c) { estimateTotal = Number(c.productCount || 0); break }
+            }
+          } else if (pid) {
+            const pnode = categoryParents.find(p => p.id === pid)
+            if (pnode) estimateTotal = Number(pnode.productCount || 0)
+          }
+          if (estimateTotal != null) {
+            const estPages = Math.max(1, Math.ceil(estimateTotal / productsPerPage))
+            if (currentPage > estPages) {
+              setCurrentPage(1)
+              try {
+                const sp = new URLSearchParams(searchParams?.toString?.() || '')
+                sp.set('page', '1')
+                replaceCatalogUrl(sp)
+              } catch {}
+              return
+            }
+          }
+        } catch {}
+
+        // Determine seed for curated full-catalog order (stable per session)
+        let seed = null
+        if (isCuratedAllNoSearch) {
+          try {
+            const s = sessionStorage.getItem('curatedShuffle')
+            if (s) seed = Number(s)
+            else {
+              seed = Date.now()
+              sessionStorage.setItem('curatedShuffle', String(seed))
+            }
+          } catch {
+            seed = Date.now()
+          }
+        }
+
+        // Quick cache hit check
+        const cacheKey = JSON.stringify({ cid, pid, search: trimmed, page: currentPage, limit: productsPerPage, seed })
+        const cached = pageDataCache.get(cacheKey)
+        if (cached && cached.data) {
+          const r = cached.data
+          setProducts(r.products || [])
+          setTotalProducts(r.totalCount || 0)
+          const pages = Math.max(1, Math.ceil((r.totalCount || 0) / productsPerPage))
+          setTotalPages(pages)
+          setProductsLoading(false)
+          return
+        }
+
         if (cid) {
           result = await getProducts({
             categoryId: cid,
-            searchTerm: searchTerm.trim(),
+            searchTerm: trimmed,
             limit: productsPerPage,
             page: currentPage
           })
         } else if (pid) {
           const ids = childIdsByParent.get(pid) || []
           result = await getProductsByCategoryIds(ids, {
-            searchTerm: searchTerm.trim(),
+            searchTerm: trimmed,
             limit: productsPerPage,
             page: currentPage
           })
         } else {
-          if (!searchTerm.trim()) {
+          if (isCuratedAllNoSearch) {
             // Full catalog in curated random order with pagination, keyed by shuffle seed
             const childMeta = []
             for (const p of categoryParents) {
@@ -157,40 +263,71 @@ export default function HomePage() {
                 if ((c.productCount || 0) > 0) childMeta.push({ id: c.id, productCount: c.productCount })
               }
             }
-            let seed = Date.now()
-            try {
-              const s = sessionStorage.getItem('curatedShuffle')
-              if (s) seed = Number(s)
-              else {
-                seed = Date.now()
-                sessionStorage.setItem('curatedShuffle', String(seed))
-              }
-            } catch {}
-            result = await getCuratedAllProductsOrder(childMeta, { page: currentPage, limit: productsPerPage, seed })
+            const seedUse = seed ?? Date.now()
+            result = await getCuratedAllProductsOrder(childMeta, { page: currentPage, limit: productsPerPage, seed: seedUse })
           } else {
             // Global search with no filters: default search order
             result = await getProducts({
-              searchTerm: searchTerm.trim(),
+              searchTerm: trimmed,
               limit: productsPerPage,
               page: currentPage
             })
           }
         }
-        
-  // Logs de depuración removidos para producción
-        
-        // Usar los productos directamente sin modificar
-        setProducts(result.products)
-        setTotalProducts(result.totalCount)
-        
-  const isCuratedAll = !cid && !pid && !searchTerm.trim()
+
+  // Update state (ignore stale)
+  if (rid !== loadProducts._rid) return
+  setProducts(result.products)
+  setTotalProducts(result.totalCount)
   const pages = Math.max(1, Math.ceil(result.totalCount / productsPerPage))
-        setTotalPages(pages)
-        
-        // Si la página actual es mayor que el total de páginas, volver a la primera
+  setTotalPages(pages)
+
+        // Save in cache
+        try { pageDataCache.set(cacheKey, { ts: Date.now(), data: result }) } catch {}
+
+        // Clamp page if overflow
         if (currentPage > pages) {
           setCurrentPage(1)
+          try {
+            const sp = new URLSearchParams(searchParams?.toString?.() || '')
+            sp.set('page', '1')
+            replaceCatalogUrl(sp)
+          } catch {}
         }
+
+        // Prefetch next page in background
+        try {
+          const nextPage = currentPage + 1
+          if (nextPage <= pages) {
+            const nextKey = JSON.stringify({ cid, pid, search: trimmed, page: nextPage, limit: productsPerPage, seed })
+            if (!pageDataCache.has(nextKey)) {
+              ;(async () => {
+                try {
+                  let res
+                  if (cid) {
+                    res = await getProducts({ categoryId: cid, searchTerm: trimmed, limit: productsPerPage, page: nextPage })
+                  } else if (pid) {
+                    const ids = childIdsByParent.get(pid) || []
+                    res = await getProductsByCategoryIds(ids, { searchTerm: trimmed, limit: productsPerPage, page: nextPage })
+                  } else if (isCuratedAllNoSearch) {
+                    const childMeta = []
+                    for (const p of categoryParents) {
+                      if ((p.productCount || 0) > 0) childMeta.push({ id: p.id, productCount: p.productCount })
+                      for (const c of (p.children || [])) {
+                        if ((c.productCount || 0) > 0) childMeta.push({ id: c.id, productCount: c.productCount })
+                      }
+                    }
+                    const seedUse = seed ?? Date.now()
+                    res = await getCuratedAllProductsOrder(childMeta, { page: nextPage, limit: productsPerPage, seed: seedUse })
+                  } else {
+                    res = await getProducts({ searchTerm: trimmed, limit: productsPerPage, page: nextPage })
+                  }
+                  pageDataCache.set(nextKey, { ts: Date.now(), data: res })
+                } catch {}
+              })()
+            }
+          }
+        } catch {}
       } catch (error) {
         console.error('Error loading products:', error)
         setProducts([])
@@ -217,12 +354,26 @@ export default function HomePage() {
     setCurrentPage(1) // Reset to first page on search
     if (term.trim()) {
       setSelectedCategory(null)
+      // Búsqueda global: limpiar filtros en la URL y setear page=1
+      try {
+        const sp = new URLSearchParams(searchParams?.toString?.() || '')
+        sp.delete('categoryId')
+        sp.delete('parentId')
+        sp.set('page', '1')
+        pushCatalogUrl(sp)
+      } catch {}
     }
   }
   
   const handlePageChange = (newPage) => {
     if (newPage >= 1 && newPage <= totalPages && newPage !== currentPage) {
       setCurrentPage(newPage);
+      // push page to URL so it persists on reload
+      try {
+        const sp = new URLSearchParams(searchParams?.toString?.() || '')
+        sp.set('page', String(newPage))
+        pushCatalogUrl(sp)
+      } catch {}
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   }
@@ -658,6 +809,38 @@ export default function HomePage() {
     }
   }, [])
 
+  // Limpiar la URL UNA SOLA VEZ cuando entramos a /cart/:id y mantener lastCatalogUrl actualizado cuando no estamos en /cart/
+  useEffect(() => {
+    try {
+      if (typeof window === 'undefined') return
+      // Guardar última URL del catálogo para poder restaurarla sin navegar (track también cambios de query)
+      if (!window.location.pathname.startsWith('/cart/')) {
+        const href = window.location.href
+        lastCatalogUrlRef.current = href
+        try { sessionStorage.setItem('lastCatalogUrl', href) } catch {}
+      }
+      if (cartUrlCleanedRef.current) return
+      const isCart = window.location.pathname.startsWith('/cart/')
+      if (!isCart) return
+      const url = new URL(window.location.href)
+      const allowed = new Set(['seed'])
+      let changed = false
+      for (const key of Array.from(url.searchParams.keys())) {
+        if (!allowed.has(key)) { url.searchParams.delete(key); changed = true }
+      }
+      if (changed) window.history.replaceState({}, '', url.toString())
+      cartUrlCleanedRef.current = true
+    } catch {}
+  }, [pathname, searchParams])
+
+  // Si estamos en /cart/:id, abrir automáticamente el drawer (no navegar)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (window.location.pathname.startsWith('/cart/')) {
+      setIsCartOpen(true)
+    }
+  }, [pathname])
+
   // Sincronización desactivada: sólo se guarda al compartir para evitar saltos visuales
   useEffect(() => {
     if (SAVE_ONLY_ON_SHARE) return
@@ -832,14 +1015,25 @@ export default function HomePage() {
     const canonicalWithSeed = encodedSeed ? `${canonical}?seed=${encodedSeed}` : canonical
     try {
       const current = new URL(window.location.href)
-      const currentId = current.searchParams.get('cartId')
-      if (createdNow || currentId !== id) {
-        current.pathname = `/cart/${id}`
-        current.searchParams.delete('cart')
-        current.searchParams.delete('cartId')
-        // Mantener seed sólo si la siembra en servidor falló
-        try { if (!seedOk) current.searchParams.set('seed', encodedSeed); else current.searchParams.delete('seed') } catch {}
-        window.history.replaceState({}, '', current.toString())
+      const isCart = current.pathname.startsWith('/cart/')
+      if (isCart) {
+        const currentId = current.searchParams.get('cartId')
+        if (createdNow || currentId !== id) {
+          // guardar la última URL de catálogo previa si estamos cambiando desde catálogo a /cart/:id
+          try {
+            if (!window.location.pathname.startsWith('/cart/')) {
+              sessionStorage.setItem('lastCatalogUrl', window.location.href)
+              lastCatalogUrlRef.current = window.location.href
+            }
+          } catch {}
+          current.pathname = `/cart/${id}`
+          // limpiar cualquier parámetro no relacionado al carrito
+          const toDelete = ['cart', 'cartId', 'page', 'categoryId', 'parentId', 'q']
+          for (const k of toDelete) current.searchParams.delete(k)
+          // Mantener seed sólo si la siembra en servidor falló
+          try { if (!seedOk) current.searchParams.set('seed', encodedSeed); else current.searchParams.delete('seed') } catch {}
+          window.history.replaceState({}, '', current.toString())
+        }
       }
     } catch {}
     if (id) return (seedOk ? canonical : canonicalWithSeed)
@@ -870,7 +1064,7 @@ export default function HomePage() {
     if (cid) {
       // Try to find child name in tree
       for (const p of categoryParents) {
-        const found = p.children.find((c) => c.id === cid)
+        const found = (p.children || []).find((c) => c.id === cid)
         if (found) return found.name
       }
     }
@@ -1001,18 +1195,16 @@ export default function HomePage() {
                 </AnimatePresence>
                 <AnimatePresence>
                   {totalCartItems > 0 && (
-                    <motion.div
-                      initial={{ scale: 0 }}
-                      animate={{ scale: 1 }}
-                      exit={{ scale: 0 }}
+                    <motion.span
+                      initial={{ scale: 0, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0, opacity: 0 }}
+                      transition={{ duration: 0.18, ease: 'easeOut' }}
+                      className="absolute -top-2 -right-2 z-10 h-5 min-w-[1.25rem] px-1 inline-grid place-items-center rounded-full bg-red-600 text-white text-[11px] leading-none font-semibold tabular-nums shadow ring-1 ring-white pointer-events-none will-change-transform"
+                      aria-label={`Productos en el carrito: ${totalCartItems}`}
                     >
-                      <Badge 
-                        variant="destructive" 
-                        className="absolute -top-2 -right-2 h-6 w-6 rounded-full p-0 flex items-center justify-center text-xs"
-                      >
-                        {totalCartItems}
-                      </Badge>
-                    </motion.div>
+                      {totalCartItems}
+                    </motion.span>
                   )}
                 </AnimatePresence>
               </Button>
@@ -1102,8 +1294,8 @@ export default function HomePage() {
                       const sp = new URLSearchParams(searchParams.toString())
                       sp.delete('categoryId')
                       sp.delete('parentId')
-                      const q = sp.toString()
-                      router.push(q ? `${pathname}?${q}` : pathname)
+                      sp.set('page', '1')
+                      pushCatalogUrl(sp)
                     }}
                     className="shrink-0"
                   >
@@ -1140,7 +1332,16 @@ export default function HomePage() {
       {/* Cart Drawer */}
       <CartDrawer
         isOpen={isCartOpen}
-        onClose={() => setIsCartOpen(false)}
+        onClose={() => {
+          setIsCartOpen(false)
+          // Si estamos en /cart/:id, restaurar la última URL del catálogo sin navegar
+          try {
+            if (typeof window !== 'undefined' && window.location.pathname.startsWith('/cart/')) {
+              const prev = sessionStorage.getItem('lastCatalogUrl') || lastCatalogUrlRef.current || '/'
+              window.history.replaceState({}, '', prev)
+            }
+          } catch {}
+        }}
         cartItems={cartItems}
         onUpdateQuantity={handleUpdateQuantity}
         onRemoveItem={handleRemoveItem}

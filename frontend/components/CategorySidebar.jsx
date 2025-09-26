@@ -62,6 +62,8 @@ export default function CategorySidebar({ parents = [], totalGlobal = 0, isMobil
     // Clear both first
     sp.delete('categoryId')
     sp.delete('parentId')
+    // Reset pagination when changing filters
+    sp.set('page', '1')
     if (next?.categoryId) {
       setPending({ categoryId: next.categoryId, parentId: null })
       onBeforeSelect && onBeforeSelect('category', next.categoryId)
@@ -123,6 +125,7 @@ export default function CategorySidebar({ parents = [], totalGlobal = 0, isMobil
                 sp.delete('categoryId')
                 sp.delete('parentId')
                 sp.delete('shuffle')
+                sp.set('page', '1')
                 router.push(`${pathname}?${sp.toString()}`)
               }}
             >
@@ -160,7 +163,15 @@ export default function CategorySidebar({ parents = [], totalGlobal = 0, isMobil
                   )
                 }
                 return (
-                  <AccordionItem key={parent.id} value={`p-${parent.id}`}>
+                  <AccordionItem
+                    key={parent.id}
+                    value={`p-${parent.id}`}
+                    className={cn(
+                      'rounded-md transition-colors',
+                      // subtle outline on the whole block when open
+                      'data-[state=open]:bg-blue-50/40 data-[state=open]:ring-1 data-[state=open]:ring-blue-200/70'
+                    )}
+                  >
                     <AccordionTrigger
                       className={cn(
                         'px-2 py-2.5 rounded-md',
@@ -175,7 +186,15 @@ export default function CategorySidebar({ parents = [], totalGlobal = 0, isMobil
                       </div>
                     </AccordionTrigger>
                     <AccordionContent>
-                      <div className="space-y-1">
+                      <div
+                        className={cn(
+                          'space-y-1 p-2 rounded-md transition-colors',
+                          // left border + soft background to signal children of this parent
+                          openValue === `p-${parent.id}`
+                            ? 'bg-blue-50/50 ring-1 ring-blue-200/60 border-l-2 border-blue-300'
+                            : 'border-l-2 border-transparent'
+                        )}
+                      >
                         {parent.children.map((child) => {
                           const childActive = selectedCategoryId === String(child.id)
                           return (

@@ -1,7 +1,7 @@
 
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Image from 'next/image'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, ShoppingCart, Plus, Minus, Trash2, ImageIcon, Share2, MessageCircle } from 'lucide-react'
@@ -14,6 +14,8 @@ import { toast } from '@/hooks/use-toast'
 
 export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantity, onRemoveItem, getShareLink, shareButtonLabel }) {
   const [copied, setCopied] = useState(false)
+  const [isSharing, setIsSharing] = useState(false)
+  const [isWhatsApping, setIsWhatsApping] = useState(false)
   const totalItems = cartItems.reduce((sum, item) => sum + item.quantity, 0)
   const totalPrice = cartItems.reduce((sum, item) => {
     // Usar final_price robustamente
@@ -60,7 +62,22 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
     } catch {}
   }
 
+  // Lock background scroll only during share flows
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const prevOverflow = document.body.style.overflow
+    if (isSharing || isWhatsApping) {
+      document.body.style.overflow = 'hidden'
+    } else {
+      document.body.style.overflow = prevOverflow || ''
+    }
+    return () => {
+      document.body.style.overflow = prevOverflow || ''
+    }
+  }, [isSharing, isWhatsApping])
+
   async function handleWhatsAppClick() {
+    setIsWhatsApping(true)
     if (typeof window === 'undefined') return
     // 1) Obtener/crear un shareId estable inmediatamente
     let shareId = null
@@ -125,8 +142,12 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
         }
       }
     } catch {}
+    finally {
+      setIsWhatsApping(false)
+    }
   }
   async function handleShareClick() {
+    setIsSharing(true)
     try {
       if (typeof window === 'undefined') return
       // 1) Determine/share canonical link immediately using a stable id
@@ -220,6 +241,8 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
       } catch {}
     } catch (e) {
       toast({ title: 'No se pudo copiar', description: 'Intenta nuevamente o comparte manualmente.', variant: 'destructive' })
+    } finally {
+      setIsSharing(false)
     }
   }
 
@@ -295,6 +318,7 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
                     <Button
                       variant="outline"
                       onClick={handleShareClick}
+                      disabled={isSharing || isWhatsApping}
                     >
                       <Share2 className="h-4 w-4 mr-2" /> {shareButtonLabel || 'Guardar y compartir'}
                     </Button>
@@ -315,6 +339,7 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
                     className="w-full bg-[#25D366] hover:bg-[#1fb457] text-white"
                     size="lg"
                     onClick={handleWhatsAppClick}
+                    disabled={isWhatsApping || isSharing}
                   >
                     <MessageCircle className="h-4 w-4 mr-2" /> Finalizar compra por WhatsApp
                   </Button>
