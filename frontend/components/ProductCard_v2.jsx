@@ -78,7 +78,9 @@ function ProductCard({ product, onAddToCart }) {
   const formattedPrice = useMemo(() => formatPriceConsistently(finalPriceValue), [finalPriceValue]);
   
   const handleAddToCart = () => {
-  if (onAddToCart) onAddToCart(product, quantity)
+    // Disparamos sparkles sutiles y minimalistas
+    triggerSparkles()
+    if (onAddToCart) onAddToCart(product, quantity)
   }
   
   const incrementQuantity = () => setQuantity(prev => prev + 1)
@@ -106,6 +108,44 @@ function ProductCard({ product, onAddToCart }) {
 
   const handleImageLoad = () => {
     setImageLoading(false)
+  }
+
+  // Sparkles minimalistas al presionar "Agregar al Carrito"
+  const [bursts, setBursts] = useState([])
+  const triggerSparkles = () => {
+    const id = Math.random().toString(36).slice(2)
+    // Partículas un poco más visibles y arcoíris
+    const count = 9
+    const colors = [
+      '#EF4444', // red-500
+      '#F97316', // orange-500
+      '#F59E0B', // amber-500
+      '#EAB308', // yellow-500
+      '#84CC16', // lime-500
+      '#22C55E', // green-500
+      '#06B6D4', // cyan-500
+      '#3B82F6', // blue-500
+      '#8B5CF6', // violet-500
+      '#EC4899', // pink-500
+    ]
+    const glyphs = ['✦', '✧', '❖', '•']
+    const particles = Array.from({ length: count }, (_, i) => {
+      // Abanico un poco más amplio y distancia mayor para que suban más
+      const angle = (Math.PI / 2.5) * (i / (count - 1)) - Math.PI / 5 // ~[-36°, +36°]
+      const dist = 30 + Math.random() * 35 // 30–65px
+      const dx = Math.cos(angle) * dist
+      const dy = Math.sin(angle) * dist
+      const delay = Math.random() * 0.07
+      const color = colors[i % colors.length]
+      const rotate = (Math.random() * 40 - 20)
+      const char = glyphs[i % glyphs.length]
+      return { dx, dy: Math.abs(dy), delay, color, rotate, char }
+    })
+    setBursts((prev) => [...prev, { id, particles }])
+    // Limpiar burst luego de la animación
+    setTimeout(() => {
+      setBursts((prev) => prev.filter((b) => b.id !== id))
+    }, 900)
   }
 
   return (
@@ -205,23 +245,50 @@ function ProductCard({ product, onAddToCart }) {
                   </button>
                 </div>
                 
-                <motion.button
-                  onClick={handleAddToCart}
-                  className="w-full h-9 sm:h-10 rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-sm flex items-center justify-center gap-1.5 text-sm"
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.95 }}
-                  animate={{
-                    rotate: [0, -1, 1, -1, 0],
-                    transition: {
-                      duration: 0.4,
-                      repeat: 0,
-                      ease: "easeInOut",
-                    }
-                  }}
-                >
-                  <ShoppingCart className="h-4 w-4" />
-                  <span className="whitespace-nowrap text-sm">Agregar al Carrito</span>
-                </motion.button>
+                <div className="relative">
+                  {/* Botón */}
+                  <motion.button
+                    onClick={handleAddToCart}
+                    className="w-full h-9 sm:h-10 rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-sm flex items-center justify-center gap-1.5 text-sm"
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.95 }}
+                    animate={{
+                      rotate: [0, -1, 1, -1, 0],
+                      transition: {
+                        duration: 0.4,
+                        repeat: 0,
+                        ease: "easeInOut",
+                      }
+                    }}
+                  >
+                    <ShoppingCart className="h-4 w-4" />
+                    <span className="whitespace-nowrap text-sm">Agregar al Carrito</span>
+                  </motion.button>
+
+                  {/* Sparkles overlay */}
+                  <div className="pointer-events-none absolute inset-0 overflow-visible">
+                    {bursts.map((b) => (
+                      <React.Fragment key={b.id}>
+                        {b.particles.map((p, idx) => (
+                          <motion.span
+                            key={`${b.id}-${idx}`}
+                            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 select-none"
+                            initial={{ x: 0, y: 0, scale: 0.7, opacity: 1, rotate: 0 }}
+                            animate={{ x: p.dx, y: -p.dy * 1.7, scale: 1.15, opacity: 0, rotate: p.rotate }}
+                            transition={{ duration: 0.8, ease: 'easeOut', delay: p.delay }}
+                          >
+                            <span
+                              className="block leading-none"
+                              style={{ color: p.color, fontSize: 12, filter: 'drop-shadow(0 1px 0.5px rgba(0,0,0,0.25))' }}
+                            >
+                              {p.char}
+                            </span>
+                          </motion.span>
+                        ))}
+                      </React.Fragment>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
